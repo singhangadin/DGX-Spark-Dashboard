@@ -1,0 +1,41 @@
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dgx-spark-dashboard:local
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-8787}:8787"
+    environment:
+      DASHBOARD_SETTINGS_PATH: /app/data/settings.json
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    volumes:
+      # Docker's API is mounted for read-only metric collection only. The app has
+      # no endpoint that changes Docker state.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data:/app/data
+      # Keep the displayed identity accurate without exposing the host root.
+      - /etc/hostname:/host-hostname:ro
+      # Read host uplink counters without sharing the host network namespace.
+      - /proc/net/dev:/host-network-dev:ro
+      - /proc/net/route:/host-network-route:ro
+      # Aggregate physical-disk I/O counters, not filesystem capacity data.
+      - /proc/diskstats:/host-diskstats:ro
+    # Docker sockets are normally group-owned; install.sh discovers this GID.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health')"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

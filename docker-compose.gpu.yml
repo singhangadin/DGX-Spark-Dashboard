@@ -1,0 +1,12 @@
+# Applied automatically by install.sh after it confirms NVIDIA Container Toolkit
+# works. Keeping this separate lets the core dashboard still run on a non-GPU
+# host, with GPU telemetry shown as unavailable.
+services:
+  dashboard:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

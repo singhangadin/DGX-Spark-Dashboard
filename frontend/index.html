@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#090b11" />
+    <title>DGX Spark Dashboard</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body data-theme="auto">
+    <header>
+      <div>
+        <p class="eyebrow">HOST OBSERVABILITY</p>
+        <h1>DGX Spark</h1>
+      </div>
+      <div class="header-status">
+        <button type="button" id="theme-switch" aria-label="Change appearance">
+          <span id="theme-icon">◐</span
+          ><span id="theme-label">Auto</span></button
+        ><span class="header-divider">·</span
+        ><span id="connection" class="dot"></span
+        ><span id="host">Connecting…</span><span class="header-divider">·</span
+        ><span id="host-uptime">—</span><span class="header-divider">·</span
+        ><button id="settings-button" aria-label="Open settings">
+          <span>⚙</span><span>Settings</span>
+        </button>
+      </div>
+    </header>
+    <main>
+      <section id="summary" class="metrics-grid"></section>
+      <section class="section-heading">
+        <div>
+          <p class="eyebrow">ACCELERATION</p>
+          <h2>GPUs</h2>
+        </div>
+        <span id="updated">—</span>
+      </section>
+      <section id="gpus" class="gpu-grid"></section>
+      <section class="section-heading">
+        <div>
+          <p class="eyebrow">WORKLOADS</p>
+          <h2>Containers</h2>
+        </div>
+        <span id="container-count"></span>
+      </section>
+      <section id="containers" class="panel"></section>
+      <section class="hardware-section" aria-labelledby="hardware-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">OFFICIAL HARDWARE REFERENCE</p>
+            <h2 id="hardware-title">NVIDIA DGX Spark</h2>
+          </div>
+          <a
+            class="hardware-source"
+            href="https://www.nvidia.com/en-us/products/workstations/dgx-spark/"
+            target="_blank"
+            rel="noreferrer"
+            >NVIDIA specifications ↗</a
+          >
+        </div>
+        <article class="hardware-panel">
+          <p class="hardware-intro">
+            DGX Spark is powered by the NVIDIA GB10 Grace Blackwell Superchip,
+            combining a Blackwell GPU with a 20-core Arm CPU in a compact
+            desktop system.
+          </p>
+          <dl class="hardware-specs">
+            <div>
+              <dt>AI COMPUTE</dt>
+              <dd>Up to 1 PFLOP FP4</dd>
+            </div>
+            <div>
+              <dt>UNIFIED MEMORY</dt>
+              <dd>128 GB LPDDR5x · 273 GB/s</dd>
+            </div>
+            <div>
+              <dt>CPU</dt>
+              <dd>20-core Arm</dd>
+            </div>
+            <div>
+              <dt>NETWORKING</dt>
+              <dd>10 GbE · ConnectX-7 200 Gbps</dd>
+            </div>
+            <div>
+              <dt>GB10 TDP</dt>
+              <dd>140 W</dd>
+            </div>
+            <div>
+              <dt>FORM FACTOR</dt>
+              <dd>150 × 150 × 50.5 mm · 1.2 kg</dd>
+            </div>
+          </dl>
+          <p class="hardware-note">
+            Reference specifications from NVIDIA. Installed storage capacity and
+            attached peripherals may vary.
+          </p>
+        </article>
+      </section>
+    </main>
+    <dialog id="settings-dialog">
+      <form method="dialog" id="settings-form">
+        <div class="dialog-title">
+          <div>
+            <p class="eyebrow">CONTROL PLANE</p>
+            <h2>Collection settings</h2>
+          </div>
+          <button value="cancel" aria-label="Close settings">×</button>
+        </div>
+        <p class="hint">
+          Disabled metrics are not collected, reducing host and GPU overhead.
+        </p>
+        <label class="refresh"
+          >Refresh interval
+          <select id="refresh-seconds">
+            <option value="1">1 second</option>
+            <option value="2">2 seconds</option>
+            <option value="5">5 seconds</option>
+            <option value="10">10 seconds</option>
+            <option value="30">30 seconds</option>
+            <option value="60">60 seconds</option>
+          </select></label
+        >
+        <label class="toggle display-toggle"
+          ><div>
+            Top-card charts<br /><span
+              >Show live CPU, memory, GPU, network and disk-I/O sparklines. Turn
+              this off for text-only cards.</span
+            >
+          </div>
+          <input type="checkbox" id="show-summary-charts"
+        /></label>
+        <label class="toggle display-toggle"
+          ><div>
+            Graph display<br /><span
+              >Show visual GPU utilization bars. Turn this off for compact text
+              values.</span
+            >
+          </div>
+          <input type="checkbox" id="show-graphs"
+        /></label>
+        <div id="metric-toggles" class="toggles"></div>
+        <button id="save-settings" value="default">Save changes</button>
+      </form>
+    </dialog>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

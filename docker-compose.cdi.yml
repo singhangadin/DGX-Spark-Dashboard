@@ -1,0 +1,6 @@
+# Applied by install.sh when NVIDIA's CDI specification is present (current
+# NVIDIA Container Toolkit deployments may use CDI instead of an nvidia runtime).
+services:
+  dashboard:
+    devices:
+      - nvidia.com/gpu=all

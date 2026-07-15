@@ -1,0 +1,4 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+psutil==7.0.0
+docker==7.1.0

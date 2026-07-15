@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="DGX Spark Dashboard">
+  <defs>
+    <linearGradient id="background" x1="8" y1="6" x2="57" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1b294b"/>
+      <stop offset="1" stop-color="#0b101c"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="20" y1="15" x2="47" y2="49" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#78b2ff"/>
+      <stop offset="1" stop-color="#59e1cf"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#background)"/>
+  <rect x="8.5" y="8.5" width="47" height="47" rx="11.5" fill="none" stroke="#314467"/>
+  <path d="M16 42.5h7v-11h6.5v11H36v-17h6.5v17H49" fill="none" stroke="#5e759e" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+  <path d="m34.5 14-3.1 11.8h-7.9l11 1.4L31 39l3.2-11.1h8.2L34.5 14Z" fill="url(#spark)" filter="url(#glow)"/>
+  <circle cx="16" cy="42.5" r="2" fill="#69a7ff"/>
+  <circle cx="49" cy="42.5" r="2" fill="#59e1cf"/>
+</svg>
