@@ -1,5 +1,7 @@
 # DGX Spark Dashboard
 
+![DGX Spark Dashboard showing live host, GPU, network, and disk telemetry](assets/dashboard-screenshot.jpg)
+
 > A lightweight, self-hosted dashboard for monitoring an NVIDIA DGX Spark.
 
 DGX Spark Dashboard gives you a modern view of your system without a database,
