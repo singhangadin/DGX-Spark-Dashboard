@@ -1,5 +1,11 @@
 # DGX Spark Dashboard
 
+[![Latest release](https://img.shields.io/github/v/release/singhangadin/DGX-Spark-Dashboard?sort=semver&logo=github&color=76B900)](https://github.com/singhangadin/DGX-Spark-Dashboard/releases/latest)
+[![License](https://img.shields.io/github/license/singhangadin/DGX-Spark-Dashboard?color=blue)](LICENSE)
+[![For NVIDIA DGX Spark](https://img.shields.io/badge/for-NVIDIA%20DGX%20Spark-76B900?logo=nvidia&logoColor=white)](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
+![Deploy with Docker Compose](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/singhangad.in)
+
 ![DGX Spark Dashboard showing live host, GPU, network, and disk telemetry](assets/dashboard-screenshot.jpg)
 
 > A lightweight, self-hosted dashboard for monitoring an NVIDIA DGX Spark.
@@ -13,20 +19,20 @@ kernel files; their API payloads identify the source explicitly.
 > This is an independent community project. It is not affiliated with or
 > endorsed by NVIDIA.
 
-## Highlights
+## ✨ Highlights
 
-- CPU utilization, core/thread count, frequency, and exposed CPU/SoC temperature
-- NVIDIA GPU utilization, temperature, power draw, VRAM where the driver exposes it, and GPU workload view
-- RAM and swap usage, per-interface host-network rates, and per-disk read/write throughput
-- Docker container name, image, status, CPU, and memory usage
-- Light, dark, and system appearance modes
-- Switchable chart and text views for the summary cards and GPU details
-- Mobile-friendly layout and settings that disable collection at the source
-- One-command Docker Compose installation, with NVIDIA runtime and CDI support
+- 🧠 **CPU** — utilization, core/thread count, frequency, and exposed CPU/SoC temperature
+- 🎮 **NVIDIA GPU** — utilization, temperature, power draw, VRAM where the driver exposes it, and a GPU workload view
+- 💾 **Memory & I/O** — RAM and swap usage, per-interface host-network rates, and per-disk read/write throughput
+- 🐳 **Docker** — container name, image, status, CPU, and memory usage
+- 🌗 **Themes** — light, dark, and system appearance modes
+- 📈 **Views** — switchable chart and text modes for the summary cards and GPU details
+- 📱 **Responsive** — mobile-friendly layout with settings that disable collection at the source
+- ⚡ **One command** — Docker Compose install, with NVIDIA runtime and CDI support
 
-## Quick start
+## 🚀 Quick start
 
-### Requirements
+### 📋 Requirements
 
 - An NVIDIA DGX Spark running its supported Linux software stack
 - Administrator (`sudo`) access for first-time Docker and Compose setup
@@ -51,7 +57,7 @@ If Docker is installed for the first time, the script adds the invoking user to
 the `docker` group and continues setup automatically when the system supports
 `sg`. Otherwise, sign out and back in once, then run `./install.sh` again.
 
-### Install a specific version
+### 📌 Install a specific version
 
 Release tags follow `vMAJOR.MINOR.PATCH`; container tags use `MAJOR.MINOR.PATCH`.
 Pin an installation by passing the version to the shell receiving the installer:
@@ -63,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/singhangadin/DGX-Spark-Dashboard/ma
 The selected tag is saved in `.env`, so subsequent `./install.sh` runs remain
 on that version until you change `DASHBOARD_VERSION`. The default is `latest`.
 
-### Use `wget` or develop from source
+### 🛠️ Use `wget` or develop from source
 
 Use `wget` instead of `curl` if you prefer:
 
@@ -90,7 +96,7 @@ location, set `DGX_DASHBOARD_DIR` for the shell receiving the script:
 curl -fsSL https://raw.githubusercontent.com/singhangadin/DGX-Spark-Dashboard/main/install.sh | DGX_DASHBOARD_DIR=/opt/dgx-spark-dashboard sh
 ```
 
-### Change the port
+### 🔌 Change the port
 
 Edit `.env` and set a different port, then run the installer again:
 
@@ -104,16 +110,16 @@ DASHBOARD_PORT=8788
 
 The dashboard will then be available at `http://localhost:8788`.
 
-## What the dashboard collects
+## 📊 What the dashboard collects
 
 | Category | Data shown | How to disable it |
 | --- | --- | --- |
-| CPU | Utilization, cores, threads, frequency, CPU/SoC temperature when exposed | Settings → CPU |
-| NVIDIA GPU | Utilization, temperature, power draw, memory where available | Settings → NVIDIA GPU |
-| Memory | RAM and swap use | Settings → RAM & swap |
-| Network | Host traffic and current receive/send rate for each useful interface | Settings → Host network totals |
-| Disk I/O | Read/write throughput for every physical disk | Settings → Host disk I/O |
-| Docker | Containers, state, image, CPU, and memory use | Settings → Docker containers |
+| 🧠 CPU | Utilization, cores, threads, frequency, CPU/SoC temperature when exposed | Settings → CPU |
+| 🎮 NVIDIA GPU | Utilization, temperature, power draw, memory where available | Settings → NVIDIA GPU |
+| 💾 Memory | RAM and swap use | Settings → RAM & swap |
+| 🌐 Network | Host traffic and current receive/send rate for each useful interface | Settings → Host network totals |
+| 📀 Disk I/O | Read/write throughput for every physical disk | Settings → Host disk I/O |
+| 🐳 Docker | Containers, state, image, CPU, and memory use | Settings → Docker containers |
 
 Disabled categories are not collected. For example, disabling NVIDIA GPU skips
 the `nvidia-smi` call and disabling Docker skips all Docker socket calls.
@@ -121,7 +127,34 @@ When multiple host network interfaces or physical disks are present, use the arr
 controls on their summary cards—or swipe on a touch screen—to move between
 sources. The default-route interface is identified in the network carousel.
 
-## Dashboard settings
+## 🪶 Resource usage
+
+The dashboard is demand-driven: it runs no background collector and reads metrics
+only when a browser requests them. Measured on a DGX Spark (GB10, 20-core Arm)
+with all six categories enabled:
+
+| Measurement | Value |
+| --- | --- |
+| 📦 Container image | ~190 MB |
+| 🧵 Memory (RSS) | ~41 MiB idle, ~44 MiB serving (~0.03% of 128 GB) |
+| 💤 CPU, no dashboard open | ~0.2% of one core — just the 30 s healthcheck |
+| 🔥 CPU, one dashboard open at 2 s refresh | ~1% of one core (brief spikes while sampling Docker/GPU) |
+| ⏱️ `/api/metrics`, all categories | ~1.1 s |
+| ⚡ `/api/metrics`, Docker category disabled | ~50 ms |
+
+> 🪶 **For comparison:** NVIDIA's standard GPU observability stack (DCGM Exporter +
+> Prometheus + Grafana) runs **3 always-on containers** using **~600 MiB RAM** and
+> **~2.5 GB** of images, scraping continuously whether or not anyone is watching —
+> roughly **14× the memory** and **13× the disk** of this dashboard. That stack does
+> more (history, alerting, the full DCGM field set); this one is a live-only glance
+> at a single DGX Spark.
+
+Docker container statistics dominate the request time because Docker's stats API
+samples each running container; every other category is a fast read of host
+kernel files. Turning off categories you do not need in **Settings** removes
+their cost entirely.
+
+## ⚙️ Dashboard settings
 
 Open **Settings** in the header to choose:
 
@@ -135,7 +168,7 @@ Use the header appearance button to cycle through **Auto**, **Light**, and
 rebuilds and upgrades. Collection and display settings save immediately when a
 switch or refresh interval changes; there is no separate Save action.
 
-## Operations
+## 🧰 Operations
 
 Run these commands from the installation directory:
 
@@ -165,7 +198,7 @@ docker compose down --rmi all
 Remove the project directory and `data/` as well only if you also want to
 discard saved dashboard preferences.
 
-## GPU telemetry notes
+## 🎮 GPU telemetry notes
 
 The dashboard uses NVIDIA's tooling available inside the NVIDIA Container
 Toolkit environment. If the GPU panel says telemetry is unavailable:
@@ -180,7 +213,7 @@ not mean that power monitoring has failed; **POWER** can still report current
 draw. The DGX Spark's published GB10 TDP is a hardware specification, not
 necessarily a live driver power-limit reading.
 
-## Security and privacy
+## 🔒 Security and privacy
 
 The dashboard does not send telemetry to a cloud service. It does require
 read-only access to the Docker socket for container statistics and narrow
@@ -203,7 +236,7 @@ DASHBOARD_BIND_ADDRESS=wg0,tailscale0
 Recreate the container after changing it with `./install.sh` (or
 `docker compose up -d`).
 
-## DGX Spark reference hardware
+## 🖥️ DGX Spark reference hardware
 
 The dashboard includes a compact reference card at the bottom of the page. It
 summarizes NVIDIA's published DGX Spark platform: GB10 Grace Blackwell, a
@@ -212,7 +245,7 @@ and ConnectX networking. See the [official NVIDIA DGX Spark
 specifications](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
 for the complete and current hardware reference.
 
-## Development and contribution
+## 🤝 Development and contribution
 
 This project intentionally uses FastAPI plus dependency-free HTML, CSS, and
 JavaScript. Before contributing, read [AGENTS.md](AGENTS.md) and
@@ -224,7 +257,7 @@ docker compose config
 docker compose -f docker-compose.yml -f docker-compose.dev.yml build
 ```
 
-## Releases
+## 🏷️ Releases
 
 The release flow mirrors `singhangad.in`:
 
@@ -244,6 +277,16 @@ write contents and packages; if branch protection is enabled, allow the release
 workflow to update `main` and `develop`. The GHCR package must be public for
 anonymous one-command installation.
 
-## License
+## 📄 License
 
 Copyright 2026 Angad Singh. Licensed under the [Apache License 2.0](LICENSE).
+
+---
+
+<div align="center">
+
+Made with ☕ for the DGX Spark community · not affiliated with NVIDIA
+
+<sub>Built with a little help from Claude &amp; Codex — a few rough edges may remain while they're being smoothed out.</sub>
+
+</div>
