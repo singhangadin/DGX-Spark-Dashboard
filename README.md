@@ -1,5 +1,14 @@
 # DGX Spark Dashboard
 
+[![License](https://img.shields.io/github/license/singhangadin/DGX-Spark-Dashboard?color=blue)](LICENSE)
+[![For NVIDIA DGX Spark](https://img.shields.io/badge/for-NVIDIA%20DGX%20Spark-76B900?logo=nvidia&logoColor=white)](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
+![Platform ARM64](https://img.shields.io/badge/platform-ARM64-555)
+![Deploy with Docker Compose](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white)
+[![GitHub stars](https://img.shields.io/github/stars/singhangadin/DGX-Spark-Dashboard?logo=github)](https://github.com/singhangadin/DGX-Spark-Dashboard/stargazers)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/singhangad.in)
+
+![DGX Spark Dashboard showing live host, GPU, network, and disk telemetry](assets/dashboard-screenshot.jpg)
+
 > A lightweight, self-hosted dashboard for monitoring an NVIDIA DGX Spark.
 
 DGX Spark Dashboard gives you a modern view of your system without a database,
