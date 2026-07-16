@@ -1,5 +1,6 @@
 # DGX Spark Dashboard
 
+[![Latest release](https://img.shields.io/github/v/release/singhangadin/DGX-Spark-Dashboard?sort=semver&logo=github&color=76B900)](https://github.com/singhangadin/DGX-Spark-Dashboard/releases/latest)
 [![License](https://img.shields.io/github/license/singhangadin/DGX-Spark-Dashboard?color=blue)](LICENSE)
 [![For NVIDIA DGX Spark](https://img.shields.io/badge/for-NVIDIA%20DGX%20Spark-76B900?logo=nvidia&logoColor=white)](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
 ![Platform ARM64](https://img.shields.io/badge/platform-ARM64-555)
