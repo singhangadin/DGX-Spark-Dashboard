@@ -7,6 +7,7 @@ let settingsSaveActive = false;
 let previousNetwork = new Map();
 let previousDisk = new Map();
 let metricsLoaded = false;
+let lastData = null;
 const summaryHistory = { cpu: [], memory: [], gpu: [] };
 const sourceHistory = { network: new Map(), disk: new Map() };
 const carouselPosition = { network: 0, disk: 0 };
@@ -38,12 +39,6 @@ function applyTheme(theme) {
   $("#theme-label").textContent = labels[theme];
   $("#theme-icon").textContent = icons[theme];
   $("#theme-switch").title = `Appearance: ${labels[theme]}. Click to change.`;
-}
-function applyDisplayMode(mode) {
-  document.body.dataset.displayMode = mode;
-}
-function applySummaryDisplayMode(mode) {
-  document.body.dataset.summaryDisplayMode = mode;
 }
 const escapeHTML = (value) =>
   String(value ?? "").replace(
@@ -442,20 +437,33 @@ function renderContainers(docker) {
   );
 }
 
+// Render a metrics snapshot, honouring the current metric toggles so a change
+// takes effect instantly (disabled categories drop out) rather than waiting for
+// the next fetch. Enabling a category fills in on the following refresh.
+function renderView(data) {
+  const enabled = settings?.metrics ?? {};
+  const view = { ...data };
+  for (const key of ["cpu", "memory", "network", "disk", "gpu", "docker"]) {
+    if (enabled[key] === false) delete view[key];
+  }
+  renderSummary(view);
+  renderGpus(view.gpu);
+  renderContainers(view.docker);
+}
+
 async function refresh() {
   try {
     const response = await fetch(`${API}/metrics`, { cache: "no-store" });
     if (!response.ok) throw new Error();
     const data = await response.json();
+    lastData = data;
     $("#connection").classList.add("online");
     $("#host").textContent = data.hostname;
     $("#host-uptime").textContent = uptimeDetail(data.uptime_seconds);
     $("#app-version").textContent = versionLabel(data.version);
     $("#updated").textContent =
       `Updated ${new Date(data.timestamp).toLocaleTimeString()}`;
-    renderSummary(data);
-    renderGpus(data.gpu);
-    renderContainers(data.docker);
+    renderView(data);
     metricsLoaded = true;
     ["#summary", "#gpus", "#containers"].forEach((selector) =>
       $(selector).setAttribute("aria-busy", "false"),
@@ -608,8 +616,6 @@ async function loadSettings() {
   if (!response.ok) throw new Error("Unable to load settings");
   settings = await response.json();
   applyTheme(settings.theme);
-  applyDisplayMode(settings.display_mode);
-  applySummaryDisplayMode(settings.summary_display_mode);
   $("#refresh-seconds").value = String(settings.refresh_seconds);
   $("#show-summary-charts").checked =
     settings.summary_display_mode === "graphs";
@@ -700,8 +706,6 @@ $("#settings-form").addEventListener("submit", (event) =>
 $("#settings-form").addEventListener("change", () => {
   const previous = settings;
   settings = settingsFromForm();
-  applyDisplayMode(settings.display_mode);
-  applySummaryDisplayMode(settings.summary_display_mode);
   schedule();
   if (JSON.stringify(previous.metrics) !== JSON.stringify(settings.metrics)) {
     previousNetwork = new Map();
@@ -709,6 +713,8 @@ $("#settings-form").addEventListener("change", () => {
     sourceHistory.network.clear();
     sourceHistory.disk.clear();
   }
+  // Apply the change to the view immediately, decoupled from the save round-trip.
+  if (lastData) renderView(lastData);
   queueSettingsSave();
 });
 
@@ -735,8 +741,6 @@ renderLoading();
   } catch (_) {
     settings = createDefaultSettings();
     applyTheme(settings.theme);
-    applyDisplayMode(settings.display_mode);
-    applySummaryDisplayMode(settings.summary_display_mode);
   }
   schedule();
   await refresh();
