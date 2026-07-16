@@ -1,0 +1,9 @@
+# Source-checkout overlay. install.sh applies this automatically when the
+# Dockerfile and backend sources are present; release installations never need
+# the source tree or an on-device production build.
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dgx-spark-dashboard:local

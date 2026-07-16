@@ -8,11 +8,37 @@ log() {
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-bootstrap_from_github() {
+download_file() {
+  url=$1
+  destination=$2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$destination"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$destination" "$url"
+  else
+    echo "curl or wget is required to download DGX Spark Dashboard." >&2
+    exit 1
+  fi
+}
+
+bootstrap_release() {
   REPOSITORY=${DGX_DASHBOARD_REPOSITORY:-singhangadin/DGX-Spark-Dashboard}
-  BRANCH=${DGX_DASHBOARD_BRANCH:-main}
+  REQUESTED_VERSION=${DGX_DASHBOARD_VERSION:-latest}
   INSTALL_DIR=${DGX_DASHBOARD_DIR:-"$HOME/DGX-Spark-Dashboard"}
-  ARCHIVE_URL=${DGX_DASHBOARD_ARCHIVE_URL:-"https://github.com/${REPOSITORY}/archive/refs/heads/${BRANCH}.tar.gz"}
+  ASSET=dgx-spark-dashboard-deploy.tar.gz
+  if [ "$REQUESTED_VERSION" = latest ]; then
+    RELEASE_URL="https://github.com/${REPOSITORY}/releases/latest/download"
+  else
+    NORMALIZED_VERSION=${REQUESTED_VERSION#v}
+    if ! printf '%s\n' "$NORMALIZED_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "DGX_DASHBOARD_VERSION must be latest or X.Y.Z (optionally prefixed with v)." >&2
+      exit 1
+    fi
+    REQUESTED_VERSION=$NORMALIZED_VERSION
+    RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/v${NORMALIZED_VERSION}"
+  fi
+  BUNDLE_URL=${DGX_DASHBOARD_BUNDLE_URL:-"${RELEASE_URL}/${ASSET}"}
+  CHECKSUM_URL=${DGX_DASHBOARD_CHECKSUM_URL:-"${BUNDLE_URL}.sha256"}
   TEMP_DIR=$(mktemp -d)
 
   cleanup() {
@@ -20,42 +46,75 @@ bootstrap_from_github() {
   }
   trap cleanup 0 HUP INT TERM
 
-  if [ -e "$INSTALL_DIR" ]; then
-    echo "Refusing to overwrite existing directory: $INSTALL_DIR" >&2
-    echo "Update it from that directory with: git pull && ./install.sh" >&2
+  log "Downloading DGX Spark Dashboard release ${REQUESTED_VERSION}"
+  download_file "$BUNDLE_URL" "$TEMP_DIR/$ASSET"
+  download_file "$CHECKSUM_URL" "$TEMP_DIR/$ASSET.sha256"
+
+  log "Verifying the release checksum"
+  EXPECTED=$(awk 'NR == 1 {print $1}' "$TEMP_DIR/$ASSET.sha256")
+  if ! printf '%s\n' "$EXPECTED" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+    echo "Release checksum file is invalid." >&2
     exit 1
   fi
-
-  log "Downloading ${REPOSITORY}@${BRANCH}"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$ARCHIVE_URL" -o "$TEMP_DIR/dashboard.tar.gz"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$TEMP_DIR/dashboard.tar.gz" "$ARCHIVE_URL"
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL=$(sha256sum "$TEMP_DIR/$ASSET" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL=$(shasum -a 256 "$TEMP_DIR/$ASSET" | awk '{print $1}')
   else
-    echo "curl or wget is required to download DGX Spark Dashboard." >&2
+    echo "sha256sum or shasum is required to verify the release." >&2
+    exit 1
+  fi
+  if [ "$EXPECTED" != "$ACTUAL" ]; then
+    echo "Release checksum verification failed." >&2
     exit 1
   fi
 
-  log "Extracting the dashboard source"
-  tar -xzf "$TEMP_DIR/dashboard.tar.gz" -C "$TEMP_DIR"
-  SOURCE_DIR=$(find "$TEMP_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)
-  if [ -z "${SOURCE_DIR:-}" ] || [ ! -f "$SOURCE_DIR/install.sh" ]; then
-    echo "Downloaded archive does not contain install.sh; aborting." >&2
+  mkdir "$TEMP_DIR/deploy"
+  tar -xzf "$TEMP_DIR/$ASSET" -C "$TEMP_DIR/deploy"
+  for file in install.sh docker-compose.yml docker-compose.gpu.yml docker-compose.cdi.yml .env.example VERSION .dgx-dashboard-release; do
+    if [ ! -e "$TEMP_DIR/deploy/$file" ]; then
+      echo "Release bundle is missing $file; aborting." >&2
+      exit 1
+    fi
+  done
+
+  if [ -e "$INSTALL_DIR" ] && [ ! -f "$INSTALL_DIR/.dgx-dashboard-release" ]; then
+    echo "Refusing to overwrite a source checkout or unmanaged directory: $INSTALL_DIR" >&2
+    echo "Choose another DGX_DASHBOARD_DIR or run that checkout's ./install.sh." >&2
     exit 1
   fi
 
+  log "Installing deployment files to $INSTALL_DIR"
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  mv "$SOURCE_DIR" "$INSTALL_DIR"
-  log "Source installed to $INSTALL_DIR"
+  mkdir -p "$INSTALL_DIR"
+  for file in install.sh docker-compose.yml docker-compose.gpu.yml docker-compose.cdi.yml .env.example VERSION .dgx-dashboard-release; do
+    cp "$TEMP_DIR/deploy/$file" "$INSTALL_DIR/$file"
+  done
+  chmod 0755 "$INSTALL_DIR/install.sh"
   cd "$INSTALL_DIR"
-  DGX_DASHBOARD_BOOTSTRAPPED=1 sh ./install.sh
+  DGX_DASHBOARD_BOOTSTRAPPED=1 DGX_DASHBOARD_RELEASE_VERSION="$REQUESTED_VERSION" sh ./install.sh
   exit $?
 }
 
-# `curl .../install.sh | sh` has no project files beside the script. Download
-# the selected branch first, then re-run this same script from the checkout.
-if [ "${DGX_DASHBOARD_BOOTSTRAPPED:-0}" != 1 ] && { [ ! -f "$ROOT/docker-compose.yml" ] || [ ! -f "$ROOT/Dockerfile" ] || [ ! -d "$ROOT/backend" ]; }; then
-  bootstrap_from_github
+# A piped installer has no adjacent files. An installed release refreshes its
+# own managed bundle before each run while preserving its configured image tag.
+if [ "${DGX_DASHBOARD_BOOTSTRAPPED:-0}" != 1 ]; then
+  if [ -f "$ROOT/.dgx-dashboard-release" ]; then
+    if [ -z "${DGX_DASHBOARD_VERSION+x}" ] && [ -f "$ROOT/.env" ]; then
+      DGX_DASHBOARD_VERSION=$(sed -n 's/^DASHBOARD_VERSION=//p' "$ROOT/.env" | tail -n 1)
+      DGX_DASHBOARD_VERSION=${DGX_DASHBOARD_VERSION:-latest}
+    fi
+    DGX_DASHBOARD_DIR=${DGX_DASHBOARD_DIR:-$ROOT}
+    export DGX_DASHBOARD_DIR DGX_DASHBOARD_VERSION
+    bootstrap_release
+  elif [ ! -f "$ROOT/docker-compose.yml" ]; then
+    bootstrap_release
+  fi
+fi
+
+if [ ! -f "$ROOT/docker-compose.yml" ] || [ ! -f "$ROOT/.env.example" ]; then
+  echo "Deployment files are incomplete in $ROOT; aborting." >&2
+  exit 1
 fi
 
 cd "$ROOT"
@@ -186,6 +245,16 @@ if [ ! -f .env ]; then
   echo "Created .env (dashboard port: 8787)."
 fi
 
+# A version passed to the clone-free bootstrap is an explicit install choice.
+# Persist it so future `docker compose` commands use the same image tag.
+if [ -n "${DGX_DASHBOARD_RELEASE_VERSION:-}" ]; then
+  if grep -q '^DASHBOARD_VERSION=' .env; then
+    sed -i.bak "s/^DASHBOARD_VERSION=.*/DASHBOARD_VERSION=$DGX_DASHBOARD_RELEASE_VERSION/" .env && rm -f .env.bak
+  else
+    printf '\nDASHBOARD_VERSION=%s\n' "$DGX_DASHBOARD_RELEASE_VERSION" >> .env
+  fi
+fi
+
 if [ -S /var/run/docker.sock ]; then
   if command -v stat >/dev/null 2>&1; then
     DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock 2>/dev/null || true)
@@ -199,20 +268,34 @@ if [ -S /var/run/docker.sock ]; then
   fi
 fi
 
-# Detect the NVIDIA runtime without downloading a CUDA image during installation.
+# Compose arguments are assembled once so the same GPU integration is used for
+# pulling/building and starting the service.
+set -- -f docker-compose.yml
 log "Selecting NVIDIA GPU integration"
 if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
   log "Using NVIDIA Docker runtime"
-  log "Building and starting the dashboard"
-  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d --remove-orphans
+  set -- "$@" -f docker-compose.gpu.yml
 elif [ -f /var/run/cdi/nvidia.yaml ] || [ -f /etc/cdi/nvidia.yaml ]; then
   log "Using NVIDIA CDI integration"
-  log "Building and starting the dashboard"
-  docker compose -f docker-compose.yml -f docker-compose.cdi.yml up --build -d --remove-orphans
+  set -- "$@" -f docker-compose.cdi.yml
 else
   echo "Warning: NVIDIA Container Toolkit/CDI GPU access is unavailable. The dashboard will start, but GPU stats will be unavailable." >&2
-  log "Building and starting the dashboard without GPU access"
-  docker compose up --build -d --remove-orphans
+fi
+
+if [ "${DGX_DASHBOARD_USE_RELEASE_IMAGE:-0}" != 1 ] && [ -f Dockerfile ] && [ -d backend ] && [ -f docker-compose.dev.yml ]; then
+  set -- "$@" -f docker-compose.dev.yml
+  log "Building and starting the local source checkout"
+  docker compose "$@" up --build -d --remove-orphans
+else
+  IMAGE_VERSION=$(sed -n 's/^DASHBOARD_VERSION=//p' .env | tail -n 1)
+  IMAGE_VERSION=${IMAGE_VERSION:-latest}
+  log "Pulling release image ${IMAGE_VERSION}"
+  if ! docker compose "$@" pull dashboard; then
+    echo "Could not pull the release image. Confirm the GitHub package is public and the version exists." >&2
+    exit 1
+  fi
+  log "Starting the versioned release image"
+  docker compose "$@" up --no-build -d --remove-orphans
 fi
 PORT=$(sed -n 's/^DASHBOARD_PORT=//p' .env | tail -n 1)
 PORT=${PORT:-8787}

@@ -14,8 +14,12 @@ that convention receive the same instructions.
 ## Repository map
 
 ```
-install.sh                 Sole installer; bootstraps from GitHub or a checkout, then Docker/Compose on supported Linux hosts
-docker-compose.yml         Production deployment and minimum privileges
+install.sh                 Sole installer; bootstraps a verified release bundle or builds a source checkout
+docker-compose.yml         Production image deployment and minimum privileges
+docker-compose.dev.yml     Local source-build overlay; never shipped to release installs
+VERSION                    Sole semantic release version source
+.github/workflows/release.yml  develop→main SemVer/image/release automation
+scripts/release/           Dependency-free version bump and release-note tools
 backend/app/main.py        API, host metric collection, persisted settings
 frontend/                  Dependency-free dashboard UI
 data/                      Runtime settings volume (gitignored)
@@ -29,8 +33,10 @@ docs/ARCHITECTURE.md       Metric sources, performance and security decisions
 - Docker access is read-only in application behavior. Never add container lifecycle, shell, exec, image, or write endpoints.
 - The image must continue to run with a read-only root filesystem and as a non-root user.
 - Preserve the `./data` bind mount: it persists settings across image upgrades.
-- The read-only hostname, `/proc/net`, and `/proc/diskstats` binds keep host identity, uplink, and disk-I/O counters accurate. Do not widen them; document any additional host mount.
+- The read-only hostname, CPU/memory/load `/proc` files, `/proc/net`, and `/proc/diskstats` binds keep host telemetry accurate. Do not widen them; document any additional host mount.
+- Preserve host networking unless network telemetry is replaced with another verified host-level source; container-network `/proc/net` values are inaccurate for this product.
 - Treat the Docker socket and GPU access as privileged host integrations; document any new host mount or capability.
+- Production installation must remain clone-free and pull a released image. Keep source builds isolated to `docker-compose.dev.yml`.
 
 ## Development conventions
 
@@ -47,7 +53,7 @@ Run these before handing work off:
 ```sh
 python3 -m py_compile backend/app/main.py
 docker compose config
-docker compose build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml build
 ```
 
 For a live host with the NVIDIA Container Toolkit:

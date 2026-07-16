@@ -2,10 +2,14 @@ const $ = (selector) => document.querySelector(selector);
 const API = "/api";
 let settings = null;
 let timer = null;
-let previousNetwork = null;
-let previousDisk = null;
+let pendingSettingsSave = null;
+let settingsSaveActive = false;
+let previousNetwork = new Map();
+let previousDisk = new Map();
 let metricsLoaded = false;
-const summaryHistory = { cpu: [], memory: [], gpu: [], network: [], disk: [] };
+const summaryHistory = { cpu: [], memory: [], gpu: [] };
+const sourceHistory = { network: new Map(), disk: new Map() };
+const carouselPosition = { network: 0, disk: 0 };
 const createDefaultSettings = () => ({
   refresh_seconds: 2,
   theme: "auto",
@@ -22,11 +26,15 @@ const createDefaultSettings = () => ({
 });
 function applyTheme(theme) {
   const labels = { auto: "Auto", light: "Light", dark: "Dark" },
-    icons = { auto: "◐", light: "☀", dark: "◑" };
+    icons = { auto: "◐", light: "☀", dark: "◑" },
+    usesLightPalette =
+      theme === "light" ||
+      (theme === "auto" &&
+        window.matchMedia("(prefers-color-scheme: light)").matches);
   document.body.dataset.theme = theme;
   document
     .querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", theme === "light" ? "#f4f7fc" : "#090b11");
+    ?.setAttribute("content", usesLightPalette ? "#f4f7fc" : "#090b11");
   $("#theme-label").textContent = labels[theme];
   $("#theme-icon").textContent = icons[theme];
   $("#theme-switch").title = `Appearance: ${labels[theme]}. Click to change.`;
@@ -55,11 +63,18 @@ const prettyBytes = (value = 0) => {
   }
   return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 };
+const sourceDetail = (source, detail) =>
+  `<span class="source-detail-name">${escapeHTML(source)}</span><span class="source-detail-rates">${detail}</span>`;
 const uptimeDetail = (seconds) => {
   const d = Math.floor(seconds / 86400),
     h = Math.floor((seconds % 86400) / 3600),
     m = Math.floor((seconds % 3600) / 60);
   return d ? `Up ${d}d ${h}h ${m}m` : `Up ${h}h ${m}m`;
+};
+const versionLabel = (version) => {
+  const value = String(version || "").trim();
+  if (!value) return "—";
+  return value === "dev" ? "dev" : `v${value.replace(/^v/i, "")}`;
 };
 const setHTML = (el, html) => {
   el.replaceChildren();
@@ -71,18 +86,29 @@ const toneFor = (value, kind = "utilization") => {
   const [warning, danger] = kind === "temperature" ? [65, 80] : [60, 85];
   return value >= danger ? "danger" : value >= warning ? "warning" : "good";
 };
+// Returns a CSS custom property so tones adapt to the active theme. Only ever
+// interpolate this into an inline `style` (or `currentColor`-backed SVG), never
+// into an SVG presentation attribute, where var() does not resolve.
 const toneColor = (tone) =>
   ({
-    good: "#5fe0a6",
-    warning: "#f7c65a",
-    danger: "#ff7474",
-    neutral: "#f1f4fb",
-  })[tone] || "#f1f4fb";
+    good: "var(--tone-good)",
+    warning: "var(--tone-warning)",
+    danger: "var(--tone-danger)",
+    neutral: "var(--text)",
+  })[tone] || "var(--text)";
 const addSummarySample = (key, value, timestamp) => {
   if (!Number.isFinite(value)) return;
   const samples = summaryHistory[key];
   samples.push({ value, timestamp });
   if (samples.length > 30) samples.shift();
+};
+const addSourceSample = (kind, source, value, timestamp) => {
+  if (!Number.isFinite(value)) return [];
+  if (!sourceHistory[kind].has(source)) sourceHistory[kind].set(source, []);
+  const samples = sourceHistory[kind].get(source);
+  samples.push({ value, timestamp });
+  if (samples.length > 30) samples.shift();
+  return samples;
 };
 const sparkline = (values, tone, label, format) => {
   const observed = values.length
@@ -98,10 +124,32 @@ const sparkline = (values, tone, label, format) => {
         `${((index / (chartPoints.length - 1)) * 100).toFixed(1)},${(27 - ((value - minimum) / range) * 22).toFixed(1)}`,
     )
     .join(" ");
-  return `<div class="summary-chart-wrap" tabindex="0" role="img" aria-label="${escapeHTML(label)} chart" data-values="${observed.map((sample) => Number(sample.value).toFixed(3)).join(",")}" data-times="${observed.map((sample) => Number(sample.timestamp)).join(",")}" data-label="${escapeHTML(label)}" data-format="${format}"><svg class="summary-chart" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,31 ${line} 100,31" fill="${toneColor(tone)}" opacity=".12"/><polyline points="${line}" fill="none" stroke="${toneColor(tone)}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="chart-tooltip" role="status"></span></div>`;
+  return `<div class="summary-chart-wrap" tabindex="0" role="img" aria-label="${escapeHTML(label)} chart" data-values="${observed.map((sample) => Number(sample.value).toFixed(3)).join(",")}" data-times="${observed.map((sample) => Number(sample.timestamp)).join(",")}" data-label="${escapeHTML(label)}" data-format="${format}"><svg class="summary-chart" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true" style="color:${toneColor(tone)}"><polyline points="0,31 ${line} 100,31" fill="currentColor" opacity=".12"/><polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="chart-tooltip" role="status"></span></div>`;
 };
-const card = (label, value, sub, tone = "neutral", chart = "") =>
-  `<article class="card"><div class="label">${label}</div><div class="value" style="color:${toneColor(tone)}">${value}</div><div class="sub">${sub || ""}</div>${chart}</article>`;
+const card = (
+  label,
+  value,
+  sub,
+  tone = "neutral",
+  chart = "",
+  className = "",
+  title = "",
+) =>
+  `<article class="card ${className}"${title ? ` title="${escapeHTML(title)}"` : ""}><div class="label">${label}</div><div class="value" style="color:${toneColor(tone)}">${value}</div><div class="sub">${sub || ""}</div>${chart}</article>`;
+const sourceCarouselCard = (kind, label, slides, className = "") => {
+  const active = Math.min(carouselPosition[kind], slides.length - 1);
+  carouselPosition[kind] = Math.max(0, active);
+  const controls =
+    slides.length > 1
+      ? `<div class="source-pager"><button type="button" data-carousel="${kind}" data-direction="-1" aria-label="Previous ${escapeHTML(label.toLowerCase())} source">‹</button><span data-carousel-count aria-live="polite">${active + 1} / ${slides.length}</span><button type="button" data-carousel="${kind}" data-direction="1" aria-label="Next ${escapeHTML(label.toLowerCase())} source">›</button></div>`
+      : "";
+  return `<article class="card source-carousel-card ${slides.length > 1 ? "has-carousel-controls" : ""} ${className}" data-carousel-kind="${kind}" aria-label="${escapeHTML(label)} sources"><div class="carousel-heading"><div class="label">${label}</div>${controls}</div>${slides
+    .map(
+      (slide, index) =>
+        `<section class="source-slide${index === active ? " active" : ""}" data-carousel-slide="${kind}" data-index="${index}" data-source="${escapeHTML(slide.name)}"${index === active ? "" : " hidden"}${slide.title ? ` title="${escapeHTML(slide.title)}"` : ""}><div class="value" style="color:${toneColor(slide.tone || "neutral")}">${slide.value}</div><div class="sub">${slide.sub || ""}</div>${slide.chart || ""}</section>`,
+    )
+    .join("")}</article>`;
+};
 const skeleton = (className = "") =>
   `<span class="skeleton ${className}" aria-hidden="true"></span>`;
 
@@ -182,46 +230,69 @@ function renderSummary(data) {
     );
   }
   if (data.network) {
-    const now = data.timestamp,
-      source = data.network.source === "host" ? "Host" : "Container fallback",
-      interfaceName = data.network.interface
-        ? ` · ${data.network.interface}`
-        : "";
-    let rate = `Collecting rate… · ${source}${interfaceName}`,
-      combinedRate = 0;
-    if (previousNetwork) {
-      const dt = Math.max((now - previousNetwork.time) / 1000, 0.1),
-        receivedRate = Math.max(
-          0,
-          (data.network.bytes_received - previousNetwork.rx) / dt,
-        ),
-        sentRate = Math.max(
-          0,
-          (data.network.bytes_sent - previousNetwork.tx) / dt,
+    const source = data.network.source === "host" ? "Host" : "Container fallback",
+      interfaces = data.network.interfaces?.length
+        ? data.network.interfaces
+        : [
+            {
+              name: data.network.interface || "Aggregate",
+              bytes_received: data.network.bytes_received,
+              bytes_sent: data.network.bytes_sent,
+              default: true,
+            },
+          ],
+      nextNetwork = new Map(),
+      slides = interfaces.map((networkInterface) => {
+        const previous = previousNetwork.get(networkInterface.name);
+        const sourceLabel = `${networkInterface.name}${networkInterface.default ? " (default)" : ""}`;
+        let rate = "Collecting rate…",
+          combinedRate = 0;
+        if (previous) {
+          const dt = Math.max((data.timestamp - previous.time) / 1000, 0.1),
+            receivedRate = Math.max(
+              0,
+              (networkInterface.bytes_received - previous.rx) / dt,
+            ),
+            sentRate = Math.max(
+              0,
+              (networkInterface.bytes_sent - previous.tx) / dt,
+            );
+          combinedRate = receivedRate + sentRate;
+          rate = `↓ ${prettyBytes(receivedRate)}/s · ↑ ${prettyBytes(sentRate)}/s`;
+        }
+        nextNetwork.set(networkInterface.name, {
+          time: data.timestamp,
+          rx: networkInterface.bytes_received,
+          tx: networkInterface.bytes_sent,
+        });
+        const history = addSourceSample(
+          "network",
+          networkInterface.name,
+          combinedRate,
+          data.timestamp,
         );
-      combinedRate = receivedRate + sentRate;
-      rate = `↓ ${prettyBytes(receivedRate)}/s · ↑ ${prettyBytes(sentRate)}/s · ${source}${interfaceName}`;
-    }
-    previousNetwork = {
-      time: now,
-      rx: data.network.bytes_received,
-      tx: data.network.bytes_sent,
-    };
-    addSummarySample("network", combinedRate, data.timestamp);
+        return {
+          name: networkInterface.name,
+          value: prettyBytes(networkInterface.bytes_received),
+          sub: sourceDetail(sourceLabel, rate),
+          chart: showCharts
+            ? sparkline(
+                history,
+                "neutral",
+                `${networkInterface.name} combined network`,
+                "bytes",
+              )
+            : "",
+          title: `${source} interface · received total ${prettyBytes(networkInterface.bytes_received)} · sent total ${prettyBytes(networkInterface.bytes_sent)}`,
+        };
+      });
+    previousNetwork = nextNetwork;
     cards.push(
-      card(
+      sourceCarouselCard(
+        "network",
         "HOST NETWORK",
-        prettyBytes(data.network.bytes_received),
-        rate,
-        "neutral",
-        showCharts
-          ? sparkline(
-              summaryHistory.network,
-              "neutral",
-              "Combined network",
-              "bytes",
-            )
-          : "",
+        slides,
+        "network-card",
       ),
     );
   }
@@ -229,45 +300,68 @@ function renderSummary(data) {
     if (!data.disk.available) {
       cards.push(card("DISK I/O", "—", data.disk.reason, "neutral"));
     } else {
-      const now = data.timestamp,
-        deviceName = data.disk.devices ? ` · ${data.disk.devices}` : "";
-      let totalRate = "Collecting rate…",
-        detail = `Host disks${deviceName}`,
-        combinedRate = 0;
-      if (previousDisk) {
-        const dt = Math.max((now - previousDisk.time) / 1000, 0.1),
-          readRate = Math.max(
-            0,
-            (data.disk.read_bytes - previousDisk.read) / dt,
-          ),
-          writeRate = Math.max(
-            0,
-            (data.disk.write_bytes - previousDisk.write) / dt,
+      const disks = data.disk.disks?.length
+          ? data.disk.disks
+          : [
+              {
+                name: data.disk.devices || "Host disks",
+                read_bytes: data.disk.read_bytes,
+                write_bytes: data.disk.write_bytes,
+              },
+            ],
+        nextDisk = new Map(),
+        slides = disks.map((disk) => {
+          const previous = previousDisk.get(disk.name);
+          let totalRate = "—",
+            detail = "Collecting rate…",
+            combinedRate = 0;
+          if (previous) {
+            const dt = Math.max((data.timestamp - previous.time) / 1000, 0.1),
+              readRate = Math.max(
+                0,
+                (disk.read_bytes - previous.read) / dt,
+              ),
+              writeRate = Math.max(
+                0,
+                (disk.write_bytes - previous.write) / dt,
+              );
+            combinedRate = readRate + writeRate;
+            totalRate = `${prettyBytes(combinedRate)}/s`;
+            detail = `R ${prettyBytes(readRate)}/s · W ${prettyBytes(writeRate)}/s`;
+          }
+          nextDisk.set(disk.name, {
+            time: data.timestamp,
+            read: disk.read_bytes,
+            write: disk.write_bytes,
+          });
+          const history = addSourceSample(
+            "disk",
+            disk.name,
+            combinedRate,
+            data.timestamp,
           );
-        combinedRate = readRate + writeRate;
-        totalRate = `${prettyBytes(combinedRate)}/s`;
-        detail = `Read ${prettyBytes(readRate)}/s · Write ${prettyBytes(writeRate)}/s${deviceName}`;
-      }
-      previousDisk = {
-        time: now,
-        read: data.disk.read_bytes,
-        write: data.disk.write_bytes,
-      };
-      addSummarySample("disk", combinedRate, data.timestamp);
+          return {
+            name: disk.name,
+            value: totalRate,
+            sub: sourceDetail(disk.name, detail),
+            chart: showCharts
+              ? sparkline(
+                  history,
+                  "neutral",
+                  `${disk.name} combined disk I/O`,
+                  "bytes",
+                )
+              : "",
+            title: `Host disk ${disk.name} · read total ${prettyBytes(disk.read_bytes)} · written total ${prettyBytes(disk.write_bytes)}`,
+          };
+        });
+      previousDisk = nextDisk;
       cards.push(
-        card(
+        sourceCarouselCard(
+          "disk",
           "DISK I/O",
-          totalRate,
-          detail,
-          "neutral",
-          showCharts
-            ? sparkline(
-                summaryHistory.disk,
-                "neutral",
-                "Combined disk I/O",
-                "bytes",
-              )
-            : "",
+          slides,
+          "disk-card",
         ),
       );
     }
@@ -356,6 +450,7 @@ async function refresh() {
     $("#connection").classList.add("online");
     $("#host").textContent = data.hostname;
     $("#host-uptime").textContent = uptimeDetail(data.uptime_seconds);
+    $("#app-version").textContent = versionLabel(data.version);
     $("#updated").textContent =
       `Updated ${new Date(data.timestamp).toLocaleTimeString()}`;
     renderSummary(data);
@@ -422,14 +517,72 @@ function updateChartTooltip(chart, clientX) {
         second: "2-digit",
       })
     : "Time unavailable";
-  chart.querySelector(".chart-tooltip").textContent =
-    `${chart.dataset.label}: ${formatted} · ${time}`;
+  const tooltip = chart.querySelector(".chart-tooltip");
+  tooltip.textContent = `${chart.dataset.label}: ${formatted} · ${time}`;
+  chart.classList.add("show-tooltip");
+  const halfWidth = tooltip.offsetWidth / 2,
+    desiredCenter = rect.left + position * rect.width,
+    safeCenter = Math.min(
+      window.innerWidth - halfWidth - 8,
+      Math.max(halfWidth + 8, desiredCenter),
+    );
   chart.style.setProperty(
     "--tooltip-position",
-    `${Math.min(92, Math.max(8, position * 100))}%`,
+    `${safeCenter - rect.left}px`,
   );
-  chart.classList.add("show-tooltip");
 }
+function activateCarousel(kind, direction) {
+  const carousel = document.querySelector(
+    `.source-carousel-card[data-carousel-kind="${kind}"]`,
+  );
+  if (!carousel) return;
+  const slides = [...carousel.querySelectorAll("[data-carousel-slide]")];
+  if (slides.length < 2) return;
+  const next =
+    (carouselPosition[kind] + direction + slides.length) % slides.length;
+  carouselPosition[kind] = next;
+  slides.forEach((slide, index) => {
+    slide.hidden = index !== next;
+    slide.classList.toggle("active", index === next);
+    slide.classList.remove("carousel-transition");
+  });
+  const activeSlide = slides[next];
+  // Telemetry refreshes rebuild carousel markup, so transitions must be tied
+  // only to explicit source navigation. Forcing layout here lets rapid manual
+  // navigation restart the short animation without affecting polling updates.
+  void activeSlide.offsetWidth;
+  activeSlide.classList.add("carousel-transition");
+  activeSlide.addEventListener(
+    "animationend",
+    () => activeSlide.classList.remove("carousel-transition"),
+    { once: true },
+  );
+  carousel.querySelector("[data-carousel-count]").textContent =
+    `${next + 1} / ${slides.length}`;
+}
+let carouselSwipe = null;
+$("#summary").addEventListener("click", (event) => {
+  const control = event.target.closest("[data-carousel]");
+  if (control)
+    activateCarousel(control.dataset.carousel, Number(control.dataset.direction));
+});
+$("#summary").addEventListener("pointerdown", (event) => {
+  const carousel = event.target.closest("[data-carousel-kind]");
+  if (carousel && event.pointerType === "touch")
+    carouselSwipe = {
+      kind: carousel.dataset.carouselKind,
+      x: event.clientX,
+      y: event.clientY,
+    };
+});
+$("#summary").addEventListener("pointerup", (event) => {
+  if (!carouselSwipe || event.pointerType !== "touch") return;
+  const horizontal = event.clientX - carouselSwipe.x,
+    vertical = event.clientY - carouselSwipe.y;
+  if (Math.abs(horizontal) > 45 && Math.abs(horizontal) > Math.abs(vertical))
+    activateCarousel(carouselSwipe.kind, horizontal < 0 ? 1 : -1);
+  carouselSwipe = null;
+});
 $("#summary").addEventListener("pointermove", (event) => {
   const chart = event.target.closest(".summary-chart-wrap");
   if (chart) updateChartTooltip(chart, event.clientX);
@@ -476,38 +629,87 @@ function schedule() {
   timer = setInterval(refresh, settings.refresh_seconds * 1000);
 }
 
-$("#settings-button").addEventListener("click", async () => {
-  await loadSettings();
-  $("#settings-dialog").showModal();
-});
-$("#settings-form").addEventListener("submit", async (event) => {
-  if (event.submitter?.value === "cancel") return;
-  event.preventDefault();
+function settingsFromForm() {
   const metrics = {};
   document.querySelectorAll("#metric-toggles input").forEach((input) => {
     metrics[input.dataset.key] = input.checked;
   });
-  settings = {
+  return {
     refresh_seconds: Number($("#refresh-seconds").value),
     theme: settings.theme,
     display_mode: $("#show-graphs").checked ? "graphs" : "text",
-    summary_display_mode: $("#show-summary-charts").checked ? "graphs" : "text",
+    summary_display_mode: $("#show-summary-charts").checked
+      ? "graphs"
+      : "text",
     metrics,
   };
-  const response = await fetch(`${API}/settings`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(settings),
-  });
-  if (response.ok) {
-    applyTheme(settings.theme);
-    applyDisplayMode(settings.display_mode);
-    applySummaryDisplayMode(settings.summary_display_mode);
-    $("#settings-dialog").close();
-    schedule();
-    previousNetwork = null;
-    await refresh();
+}
+
+function setSettingsSaveStatus(message, state = "") {
+  const status = $("#settings-save-status");
+  status.textContent = message;
+  if (state) status.dataset.state = state;
+  else delete status.dataset.state;
+}
+
+async function drainSettingsSaves() {
+  if (settingsSaveActive) return;
+  settingsSaveActive = true;
+  while (pendingSettingsSave) {
+    const payload = pendingSettingsSave;
+    pendingSettingsSave = null;
+    setSettingsSaveStatus("Saving changes…", "saving");
+    try {
+      const response = await fetch(`${API}/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error("Unable to save settings");
+      if (!pendingSettingsSave) {
+        settings = await response.json();
+        setSettingsSaveStatus("Saved", "saved");
+        schedule();
+        await refresh();
+      }
+    } catch (_) {
+      if (!pendingSettingsSave) {
+        setSettingsSaveStatus("Could not save. Change a setting to retry.", "error");
+      }
+    }
   }
+  settingsSaveActive = false;
+}
+
+function queueSettingsSave() {
+  pendingSettingsSave = JSON.parse(JSON.stringify(settings));
+  void drainSettingsSaves();
+}
+
+$("#settings-button").addEventListener("click", async () => {
+  await loadSettings();
+  setSettingsSaveStatus("Changes save automatically.");
+  $("#settings-dialog").showModal();
+});
+$("#close-settings").addEventListener("click", () =>
+  $("#settings-dialog").close(),
+);
+$("#settings-form").addEventListener("submit", (event) =>
+  event.preventDefault(),
+);
+$("#settings-form").addEventListener("change", () => {
+  const previous = settings;
+  settings = settingsFromForm();
+  applyDisplayMode(settings.display_mode);
+  applySummaryDisplayMode(settings.summary_display_mode);
+  schedule();
+  if (JSON.stringify(previous.metrics) !== JSON.stringify(settings.metrics)) {
+    previousNetwork = new Map();
+    previousDisk = new Map();
+    sourceHistory.network.clear();
+    sourceHistory.disk.clear();
+  }
+  queueSettingsSave();
 });
 
 $("#theme-switch").addEventListener("click", async () => {
