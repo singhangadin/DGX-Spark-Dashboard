@@ -186,13 +186,20 @@ read-only host mounts for CPU, memory, load, network, disk-I/O, and identity
 data. Although the application does not expose Docker control actions, the
 Docker socket is sensitive—run the dashboard on a trusted network.
 
-For local-only access, set the bind address in `.env`:
+`DASHBOARD_BIND_ADDRESS` in `.env` controls which host addresses the dashboard
+listens on. It takes a comma-separated list of literal IPs or interface names,
+and loopback is always bound. Prefer naming specific trusted interfaces over
+`0.0.0.0` so the dashboard is not served on untrusted NICs:
 
 ```sh
+# Loopback only (the default)
 DASHBOARD_BIND_ADDRESS=127.0.0.1
+# Reachable over WireGuard and Tailscale, but no other interface
+DASHBOARD_BIND_ADDRESS=wg0,tailscale0
 ```
 
-Then run `./install.sh` again.
+Recreate the container after changing it with `./install.sh` (or
+`docker compose up -d`).
 
 ## DGX Spark reference hardware
 

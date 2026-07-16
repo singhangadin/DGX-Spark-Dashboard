@@ -21,6 +21,7 @@ VERSION                    Sole semantic release version source
 .github/workflows/release.yml  develop→main SemVer/image/release automation
 scripts/release/           Dependency-free version bump and release-note tools
 backend/app/main.py        API, host metric collection, persisted settings
+backend/app/serve.py       Multi-address/interface bind launcher; the image entrypoint
 frontend/                  Dependency-free dashboard UI
 data/                      Runtime settings volume (gitignored)
 docs/ARCHITECTURE.md       Metric sources, performance and security decisions
@@ -51,7 +52,7 @@ docs/ARCHITECTURE.md       Metric sources, performance and security decisions
 Run these before handing work off:
 
 ```sh
-python3 -m py_compile backend/app/main.py
+python3 -m py_compile backend/app/main.py backend/app/serve.py
 docker compose config
 docker compose -f docker-compose.yml -f docker-compose.dev.yml build
 ```
