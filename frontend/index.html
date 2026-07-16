@@ -26,6 +26,8 @@
         ><span id="connection" class="dot"></span
         ><span id="host">Connecting…</span><span class="header-divider">·</span
         ><span id="host-uptime">—</span><span class="header-divider">·</span
+        ><span id="app-version" class="app-version" title="Dashboard version">—</span
+        ><span class="header-divider">·</span
         ><button id="settings-button" aria-label="Open settings">
           <span>⚙</span><span>Settings</span>
         </button>
@@ -103,13 +105,13 @@
       </section>
     </main>
     <dialog id="settings-dialog">
-      <form method="dialog" id="settings-form">
+      <form id="settings-form">
         <div class="dialog-title">
           <div>
             <p class="eyebrow">CONTROL PLANE</p>
             <h2>Collection settings</h2>
           </div>
-          <button value="cancel" aria-label="Close settings">×</button>
+          <button type="button" id="close-settings" aria-label="Close settings">×</button>
         </div>
         <p class="hint">
           Disabled metrics are not collected, reducing host and GPU overhead.
@@ -144,7 +146,7 @@
           <input type="checkbox" id="show-graphs"
         /></label>
         <div id="metric-toggles" class="toggles"></div>
-        <button id="save-settings" value="default">Save changes</button>
+        <p id="settings-save-status" class="settings-save-status" role="status" aria-live="polite">Changes save automatically.</p>
       </form>
     </dialog>
     <script src="/assets/app.js"></script>

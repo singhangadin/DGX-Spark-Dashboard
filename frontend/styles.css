@@ -10,6 +10,11 @@
   --cyan: #59e1cf;
   --orange: #ffae63;
   --red: #ff7474;
+  /* Status tones: bright pastels tuned for the dark background. Light theme
+     overrides these in theme.css so warnings stay legible on the light panel. */
+  --tone-good: #5fe0a6;
+  --tone-warning: #f7c65a;
+  --tone-danger: #ff7474;
 }
 * {
   box-sizing: border-box;
@@ -111,9 +116,14 @@ main {
 }
 .card {
   padding: 20px;
-  min-height: 164px;
+  min-height: 178px;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
+  z-index: 0;
+}
+.card:hover,
+.card:focus-within {
+  z-index: 5;
 }
 .card .label,
 .small-label {
@@ -130,6 +140,92 @@ main {
   font-size: 12px;
   color: var(--muted);
   margin-top: 5px;
+  min-height: 30px;
+  line-height: 1.25;
+}
+.disk-card .sub,
+.network-card .sub {
+  display: grid;
+  gap: 2px;
+}
+.source-detail-name,
+.source-detail-rates {
+  display: block;
+  min-width: 0;
+  white-space: nowrap;
+}
+.source-carousel-card {
+  min-width: 0;
+  touch-action: pan-y;
+}
+.carousel-heading,
+.source-pager {
+  display: flex;
+  align-items: center;
+}
+.carousel-heading {
+  min-height: 14px;
+}
+.has-carousel-controls .carousel-heading {
+  padding-right: 116px;
+}
+.carousel-heading .label {
+  display: flex;
+  min-width: 0;
+  gap: 5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.carousel-heading .label span,
+.carousel-heading .label b {
+  flex: none;
+}
+.carousel-heading .label strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+.source-pager {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.source-pager button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+.source-pager button:hover,
+.source-pager button:focus-visible {
+  border-color: var(--blue);
+  color: var(--text);
+  outline: none;
+}
+.source-slide {
+  min-width: 0;
+}
+.source-slide.carousel-transition {
+  animation: source-slide-in 0.16s ease-out;
+}
+.source-carousel-card .value {
+  margin-top: 15px;
+}
+@keyframes source-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(5px);
+  }
 }
 .section-heading {
   display: flex;
@@ -308,8 +404,13 @@ select {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
   padding: 10px 0;
   font-size: 14px;
+}
+.toggle > div {
+  flex: 1;
+  min-width: 0;
 }
 .toggle span {
   color: var(--muted);
@@ -317,6 +418,7 @@ select {
 }
 input[type="checkbox"] {
   appearance: none;
+  flex: 0 0 38px;
   width: 38px;
   height: 21px;
   border-radius: 20px;
@@ -343,13 +445,22 @@ input[type="checkbox"]:checked::after {
   left: 20px;
   background: white;
 }
-#save-settings {
-  width: 100%;
-  margin-top: 14px;
-  background: #5c94ec;
-  padding: 11px;
-  border-radius: 8px;
-  font-weight: 650;
+.settings-save-status {
+  min-height: 29px;
+  margin-top: 8px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.settings-save-status[data-state="saving"] {
+  color: var(--blue);
+}
+.settings-save-status[data-state="saved"] {
+  color: var(--cyan);
+}
+.settings-save-status[data-state="error"] {
+  color: var(--red);
 }
 @media (max-width: 850px) {
   .metrics-grid {
@@ -370,8 +481,9 @@ input[type="checkbox"]:checked::after {
   .metrics-grid {
     grid-template-columns: 1fr;
   }
-  .card {
-    min-height: 130px;
+  .source-pager button {
+    width: 36px;
+    height: 36px;
   }
   .container-row {
     grid-template-columns: 1fr 70px;
@@ -382,5 +494,10 @@ input[type="checkbox"]:checked::after {
   }
   .section-heading {
     margin-top: 31px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .source-slide.carousel-transition {
+    animation: none;
   }
 }

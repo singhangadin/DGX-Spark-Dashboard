@@ -4,7 +4,9 @@
 
 DGX Spark Dashboard gives you a modern view of your system without a database,
 cloud service, agent daemon, or frontend framework. It runs as a single Docker
-Compose service and collects only the metric categories you enable.
+Compose service and collects only the metric categories you enable. Host CPU,
+memory, uptime, network, and disk metrics come from narrow, read-only host
+kernel files; their API payloads identify the source explicitly.
 
 > This is an independent community project. It is not affiliated with or
 > endorsed by NVIDIA.
@@ -13,7 +15,7 @@ Compose service and collects only the metric categories you enable.
 
 - CPU utilization, core/thread count, frequency, and exposed CPU/SoC temperature
 - NVIDIA GPU utilization, temperature, power draw, VRAM where the driver exposes it, and GPU workload view
-- RAM and swap usage, host-network receive/send rates, and physical-disk read/write throughput
+- RAM and swap usage, per-interface host-network rates, and per-disk read/write throughput
 - Docker container name, image, status, CPU, and memory usage
 - Light, dark, and system appearance modes
 - Switchable chart and text views for the summary cards and GPU details
@@ -24,10 +26,10 @@ Compose service and collects only the metric categories you enable.
 
 ### Requirements
 
-- A Linux host. On Ubuntu, Debian, and Fedora, `install.sh` installs Docker Engine and Docker Compose v2 automatically when they are missing.
-- On macOS or Windows, install and start Docker Desktop first.
-- Optional but recommended for GPU metrics: NVIDIA Container Toolkit with a
-  working host `nvidia-smi`
+- An NVIDIA DGX Spark running its supported Linux software stack
+- Administrator (`sudo`) access for first-time Docker and Compose setup
+- A working NVIDIA driver and NVIDIA Container Toolkit (`nvidia-smi` must work
+  on the DGX Spark host)
 
 For the quickest setup on a new host, run:
 
@@ -37,18 +39,29 @@ curl -fsSL https://raw.githubusercontent.com/singhangadin/DGX-Spark-Dashboard/ma
 
 Open [http://localhost:8787](http://localhost:8787).
 
-The installer is safe to run again after an update. It downloads the source,
-creates `.env` on the first run, installs Docker and Compose when supported,
-detects NVIDIA Docker runtime or CDI integration automatically, and starts the
-appropriate Compose configuration. It finishes by checking the local health
-endpoint. The same `install.sh` handles both direct installation and an
-existing source checkout.
+The installer downloads a checksum-verified deployment bundle from the latest
+GitHub Release and pulls its prebuilt, versioned ARM64 image from GitHub
+Container Registry. It does **not** clone the repository or compile the image on
+the DGX Spark. It creates `.env`, installs Docker and Compose when required,
+detects NVIDIA runtime or CDI integration, and checks the local health endpoint.
 
 If Docker is installed for the first time, the script adds the invoking user to
 the `docker` group and continues setup automatically when the system supports
 `sg`. Otherwise, sign out and back in once, then run `./install.sh` again.
 
-### Use `wget` or clone the source
+### Install a specific version
+
+Release tags follow `vMAJOR.MINOR.PATCH`; container tags use `MAJOR.MINOR.PATCH`.
+Pin an installation by passing the version to the shell receiving the installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/singhangadin/DGX-Spark-Dashboard/main/install.sh | DGX_DASHBOARD_VERSION=1.0.0 sh
+```
+
+The selected tag is saved in `.env`, so subsequent `./install.sh` runs remain
+on that version until you change `DASHBOARD_VERSION`. The default is `latest`.
+
+### Use `wget` or develop from source
 
 Use `wget` instead of `curl` if you prefer:
 
@@ -56,7 +69,8 @@ Use `wget` instead of `curl` if you prefer:
 wget -qO- https://raw.githubusercontent.com/singhangadin/DGX-Spark-Dashboard/main/install.sh | sh
 ```
 
-To inspect or change the source before installing, clone the repository:
+To inspect or change the source, clone the repository. In a source checkout,
+the same installer detects `docker-compose.dev.yml` and builds the local code:
 
 ```sh
 git clone https://github.com/singhangadin/DGX-Spark-Dashboard.git
@@ -64,8 +78,10 @@ cd DGX-Spark-Dashboard
 ./install.sh
 ```
 
-The direct installer downloads the repository to `~/DGX-Spark-Dashboard` and
-intentionally refuses to overwrite an existing directory. To use a different
+The release installer stores only its small deployment bundle and persistent
+settings under `~/DGX-Spark-Dashboard`. Re-running the one-line command safely
+refreshes managed deployment files while preserving `.env` and `data/`. It
+refuses to overwrite a source checkout or unrelated directory. To use another
 location, set `DGX_DASHBOARD_DIR` for the shell receiving the script:
 
 ```sh
@@ -93,12 +109,15 @@ The dashboard will then be available at `http://localhost:8788`.
 | CPU | Utilization, cores, threads, frequency, CPU/SoC temperature when exposed | Settings → CPU |
 | NVIDIA GPU | Utilization, temperature, power draw, memory where available | Settings → NVIDIA GPU |
 | Memory | RAM and swap use | Settings → RAM & swap |
-| Network | Default-uplink traffic and current receive/send rate | Settings → Host network totals |
-| Disk I/O | Physical-disk read/write throughput | Settings → Host disk I/O |
+| Network | Host traffic and current receive/send rate for each useful interface | Settings → Host network totals |
+| Disk I/O | Read/write throughput for every physical disk | Settings → Host disk I/O |
 | Docker | Containers, state, image, CPU, and memory use | Settings → Docker containers |
 
 Disabled categories are not collected. For example, disabling NVIDIA GPU skips
 the `nvidia-smi` call and disabling Docker skips all Docker socket calls.
+When multiple host network interfaces or physical disks are present, use the arrow
+controls on their summary cards—or swipe on a touch screen—to move between
+sources. The default-route interface is identified in the network carousel.
 
 ## Dashboard settings
 
@@ -111,30 +130,34 @@ Open **Settings** in the header to choose:
 
 Use the header appearance button to cycle through **Auto**, **Light**, and
 **Dark**. All preferences persist in `data/settings.json` across container
-rebuilds and upgrades.
+rebuilds and upgrades. Collection and display settings save immediately when a
+switch or refresh interval changes; there is no separate Save action.
 
 ## Operations
 
-Run these commands from the repository directory:
+Run these commands from the installation directory:
 
 ```sh
 docker compose ps          # service status
 docker compose logs -f     # follow logs
 docker compose down        # stop the dashboard; settings remain in ./data
-./install.sh               # build and start after an update
+./install.sh               # pull and start the configured release version
 ```
 
-To update the dashboard:
+To update an installation tracking `latest`:
 
 ```sh
-git pull
 ./install.sh
 ```
+
+To move a pinned installation to another release, edit `.env`, set
+`DASHBOARD_VERSION=X.Y.Z`, and run `./install.sh`. Re-running the original curl
+command also refreshes the deployment bundle from the latest GitHub Release.
 
 To remove it:
 
 ```sh
-docker compose down --rmi local
+docker compose down --rmi all
 ```
 
 Remove the project directory and `data/` as well only if you also want to
@@ -158,22 +181,15 @@ necessarily a live driver power-limit reading.
 ## Security and privacy
 
 The dashboard does not send telemetry to a cloud service. It does require
-read-only access to the Docker socket for container statistics and a read-only
-host mount for host identity and filesystem context. Although the application
-does not expose Docker control actions, the Docker socket is sensitive—run the
-dashboard on a trusted network.
+read-only access to the Docker socket for container statistics and narrow
+read-only host mounts for CPU, memory, load, network, disk-I/O, and identity
+data. Although the application does not expose Docker control actions, the
+Docker socket is sensitive—run the dashboard on a trusted network.
 
-For local-only access, change the Compose port mapping in `docker-compose.yml`
-from:
+For local-only access, set the bind address in `.env`:
 
-```yaml
-- "${DASHBOARD_PORT:-8787}:8787"
-```
-
-to:
-
-```yaml
-- "127.0.0.1:${DASHBOARD_PORT:-8787}:8787"
+```sh
+DASHBOARD_BIND_ADDRESS=127.0.0.1
 ```
 
 Then run `./install.sh` again.
@@ -196,8 +212,28 @@ JavaScript. Before contributing, read [AGENTS.md](AGENTS.md) and
 ```sh
 python3 -m py_compile backend/app/main.py
 docker compose config
-docker compose build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml build
 ```
+
+## Releases
+
+The release flow mirrors `singhangad.in`:
+
+1. Open **GitHub → Actions → Release → Run workflow** on `main`.
+2. Choose `PATCH`, `MINOR`, or `MAJOR`; CI computes the next value from
+   [`VERSION`](VERSION).
+3. CI promotes `develop` into `main`, commits `chore(release): vX.Y.Z`, creates
+   the annotated SemVer tag, generates notes from `feat:` and `fix:` commits,
+   publishes `ghcr.io/singhangadin/dgx-spark-dashboard:X.Y.Z` plus `latest`,
+   attaches the checksum-protected deployment bundle to the GitHub Release, and
+   syncs the release back into `develop`.
+
+For the first release, set the optional `release_as` input to `1.0.0`. Like the
+reference project, this explicit bootstrap tags current `main` without doing
+the normal `develop` promotion. Repository Actions must have permission to
+write contents and packages; if branch protection is enabled, allow the release
+workflow to update `main` and `develop`. The GHCR package must be public for
+anonymous one-command installation.
 
 ## License
 

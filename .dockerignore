@@ -1,0 +1,11 @@
+.git
+.github
+.env
+data
+docs
+scripts
+*.md
+docker-compose*.yml
+install.sh
+LICENSE
+VERSION

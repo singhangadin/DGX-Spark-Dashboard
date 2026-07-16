@@ -26,11 +26,18 @@ from requests.exceptions import RequestException
 APP_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = APP_DIR / "frontend"
 SETTINGS_PATH = Path(os.getenv("DASHBOARD_SETTINGS_PATH", "/app/data/settings.json"))
+APP_VERSION = os.getenv("DASHBOARD_APP_VERSION", "dev")
 HOSTNAME_PATH = Path(os.getenv("DASHBOARD_HOSTNAME_PATH", "/host-hostname"))
+HOST_PROC_STAT_PATH = Path(os.getenv("DASHBOARD_HOST_PROC_STAT_PATH", "/host-proc-stat"))
+HOST_PROC_CPUINFO_PATH = Path(os.getenv("DASHBOARD_HOST_PROC_CPUINFO_PATH", "/host-proc-cpuinfo"))
+HOST_MEMINFO_PATH = Path(os.getenv("DASHBOARD_HOST_MEMINFO_PATH", "/host-meminfo"))
+HOST_LOADAVG_PATH = Path(os.getenv("DASHBOARD_HOST_LOADAVG_PATH", "/host-loadavg"))
 HOST_NETWORK_DEV_PATH = Path(os.getenv("DASHBOARD_HOST_NETWORK_DEV_PATH", "/host-network-dev"))
 HOST_NETWORK_ROUTE_PATH = Path(os.getenv("DASHBOARD_HOST_NETWORK_ROUTE_PATH", "/host-network-route"))
 HOST_DISKSTATS_PATH = Path(os.getenv("DASHBOARD_HOST_DISKSTATS_PATH", "/host-diskstats"))
 SETTINGS_LOCK = threading.Lock()
+CPU_SAMPLE_LOCK = threading.Lock()
+PREVIOUS_HOST_CPU_SAMPLE: tuple[int, int] | None = None
 DEFAULT_SETTINGS = {
     "refresh_seconds": 2,
     "theme": "auto",
@@ -99,22 +106,158 @@ def get_host_name() -> str:
     return os.uname().nodename
 
 
+def _read_host_proc(path: Path) -> str | None:
+    try:
+        return path.read_text()
+    except OSError:
+        return None
+
+
+def _host_cpu_sample() -> tuple[int, int] | None:
+    stat = _read_host_proc(HOST_PROC_STAT_PATH)
+    if stat is None:
+        return None
+    for line in stat.splitlines():
+        fields = line.split()
+        if not fields or fields[0] != "cpu" or len(fields) < 5:
+            continue
+        try:
+            values = [int(value) for value in fields[1:]]
+        except ValueError:
+            return None
+        total = sum(values)
+        idle = values[3] + (values[4] if len(values) > 4 else 0)
+        return total, idle
+    return None
+
+
+def _cpu_frequency_mhz() -> float | None:
+    """Best-effort current CPU frequency.
+
+    x86 exposes `cpu MHz` per core in /proc/cpuinfo, but ARM SoCs like the DGX
+    Spark's Grace CPU omit it. There psutil reads the host-visible sysfs cpufreq
+    node instead; fall back to it before giving up.
+    """
+    try:
+        frequency = psutil.cpu_freq()
+    except (OSError, NotImplementedError, AttributeError):
+        return None
+    return round(frequency.current) if frequency and frequency.current else None
+
+
+def _host_cpu_info() -> tuple[int, int, float | None]:
+    info = _read_host_proc(HOST_PROC_CPUINFO_PATH)
+    if info is None:
+        threads = psutil.cpu_count() or 1
+        return threads, psutil.cpu_count(logical=False) or threads, _cpu_frequency_mhz()
+    blocks = [block for block in info.split("\n\n") if block.strip()]
+    threads = len(blocks) or (psutil.cpu_count() or 1)
+    physical_cores: set[tuple[str, str]] = set()
+    frequencies: list[float] = []
+    for block in blocks:
+        fields = {}
+        for line in block.splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                fields[key.strip().lower()] = value.strip()
+        physical_id, core_id = fields.get("physical id"), fields.get("core id")
+        if physical_id is not None and core_id is not None:
+            physical_cores.add((physical_id, core_id))
+        try:
+            frequencies.append(float(fields.get("cpu mhz", "")))
+        except ValueError:
+            pass
+    # ARM cpuinfo lacks physical/core ids; Grace has no SMT, so one thread per
+    # core makes threads an accurate physical-core count there. Frequency also
+    # falls back to sysfs via psutil when cpuinfo omits `cpu MHz`.
+    cores = len(physical_cores) or threads
+    frequency_mhz = round(sum(frequencies) / len(frequencies)) if frequencies else _cpu_frequency_mhz()
+    return threads, cores, frequency_mhz
+
+
+def _host_load_average() -> list[float]:
+    loadavg = _read_host_proc(HOST_LOADAVG_PATH)
+    if loadavg:
+        try:
+            return [round(float(value), 2) for value in loadavg.split()[:3]]
+        except ValueError:
+            pass
+    return [round(value, 2) for value in os.getloadavg()] if hasattr(os, "getloadavg") else []
+
+
 def get_cpu() -> dict[str, Any]:
-    frequency = psutil.cpu_freq()
-    temperature = get_cpu_temperature(get_temperatures())
+    global PREVIOUS_HOST_CPU_SAMPLE
+    sample = _host_cpu_sample()
+    if sample is not None:
+        with CPU_SAMPLE_LOCK:
+            previous = PREVIOUS_HOST_CPU_SAMPLE
+            PREVIOUS_HOST_CPU_SAMPLE = sample
+        total_delta = sample[0] - previous[0] if previous else 0
+        idle_delta = sample[1] - previous[1] if previous else 0
+        percent = round(max(0, min(100, (total_delta - idle_delta) / total_delta * 100)) if total_delta else 0, 1)
+        source = "host"
+    else:
+        percent = psutil.cpu_percent(interval=None)
+        source = "container"
+    threads, cores, frequency_mhz = _host_cpu_info()
     return {
-        "percent": psutil.cpu_percent(interval=None),
-        "cores": psutil.cpu_count(logical=False) or psutil.cpu_count(),
-        "threads": psutil.cpu_count(),
-        "frequency_mhz": round(frequency.current, 0) if frequency else None,
-        "load_average": [round(value, 2) for value in os.getloadavg()] if hasattr(os, "getloadavg") else [],
-        "temperature": temperature,
+        "percent": percent,
+        "cores": cores,
+        "threads": threads,
+        "frequency_mhz": frequency_mhz,
+        "load_average": _host_load_average(),
+        "temperature": get_cpu_temperature(get_temperatures()),
+        "source": source,
     }
 
 
+def _host_memory_info() -> dict[str, int] | None:
+    meminfo = _read_host_proc(HOST_MEMINFO_PATH)
+    if meminfo is None:
+        return None
+    values: dict[str, int] = {}
+    for line in meminfo.splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        try:
+            values[key] = int(value.split()[0]) * 1024
+        except (IndexError, ValueError):
+            continue
+    return values if "MemTotal" in values else None
+
+
 def get_memory() -> dict[str, Any]:
+    values = _host_memory_info()
+    if values is not None:
+        total = values["MemTotal"]
+        available = values.get("MemAvailable")
+        if available is None:
+            available = sum(values.get(key, 0) for key in ("MemFree", "Buffers", "Cached", "SReclaimable")) - values.get("Shmem", 0)
+        return {
+            "ram": bytes_used(total, max(0, total - available)),
+            "swap": bytes_used(values.get("SwapTotal", 0), max(0, values.get("SwapTotal", 0) - values.get("SwapFree", 0))),
+            "source": "host",
+        }
     memory, swap = psutil.virtual_memory(), psutil.swap_memory()
-    return {"ram": bytes_used(memory.total, memory.used), "swap": bytes_used(swap.total, swap.used)}
+    return {
+        "ram": bytes_used(memory.total, memory.used),
+        "swap": bytes_used(swap.total, swap.used),
+        "source": "container",
+    }
+
+
+def get_uptime_seconds() -> int:
+    stat = _read_host_proc(HOST_PROC_STAT_PATH)
+    if stat:
+        for line in stat.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and fields[0] == "btime":
+                try:
+                    return round(time.time() - int(fields[1]))
+                except ValueError:
+                    break
+    return round(time.time() - psutil.boot_time())
 
 
 def _default_host_interface() -> str | None:
@@ -156,9 +299,25 @@ def _host_network_counters() -> dict[str, tuple[int, int]]:
 
 
 def get_network() -> dict[str, Any]:
-    """Return host uplink counters, falling back safely when host files are absent."""
+    """Return per-interface host counters plus backward-compatible uplink totals."""
     counters = _host_network_counters()
     default_interface = _default_host_interface()
+    virtual_prefixes = ("lo", "docker", "veth", "br-", "virbr", "cni", "flannel", "kube", "tun", "tap")
+    physical = {
+        name: values
+        for name, values in counters.items()
+        if not name.startswith(virtual_prefixes) or name == default_interface
+    }
+    interfaces = [
+        {
+            "name": name,
+            "bytes_received": physical[name][0],
+            "bytes_sent": physical[name][1],
+            "default": name == default_interface,
+        }
+        for name in sorted(physical, key=lambda name: (name != default_interface, name))
+    ]
+
     if default_interface and default_interface in counters:
         received, sent = counters[default_interface]
         return {
@@ -166,10 +325,9 @@ def get_network() -> dict[str, Any]:
             "bytes_received": received,
             "source": "host",
             "interface": default_interface,
+            "interfaces": interfaces,
         }
 
-    virtual_prefixes = ("lo", "docker", "veth", "br-", "virbr", "cni", "flannel", "kube", "tun", "tap")
-    physical = {name: values for name, values in counters.items() if not name.startswith(virtual_prefixes)}
     if physical:
         received = sum(values[0] for values in physical.values())
         sent = sum(values[1] for values in physical.values())
@@ -178,6 +336,7 @@ def get_network() -> dict[str, Any]:
             "bytes_received": received,
             "source": "host",
             "interface": ", ".join(sorted(physical)),
+            "interfaces": interfaces,
         }
 
     counters = psutil.net_io_counters()
@@ -186,37 +345,55 @@ def get_network() -> dict[str, Any]:
         "bytes_received": counters.bytes_recv,
         "source": "container",
         "interface": None,
+        "interfaces": [
+            {
+                "name": "Container aggregate",
+                "bytes_received": counters.bytes_recv,
+                "bytes_sent": counters.bytes_sent,
+                "default": True,
+            }
+        ],
     }
 
 
 def get_disk_io() -> dict[str, Any]:
-    """Read aggregate physical-device I/O counters from the host's diskstats."""
+    """Read per-device and aggregate physical-disk counters from host diskstats."""
     try:
         lines = HOST_DISKSTATS_PATH.read_text().splitlines()
     except OSError:
         return {"available": False, "reason": "host disk counters are unavailable"}
 
     physical_device = re.compile(r"(?:nvme\d+n\d+|sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|mmcblk\d+)$")
-    devices: list[str] = []
+    disks: list[dict[str, Any]] = []
     read_sectors = write_sectors = 0
     for line in lines:
         fields = line.split()
         if len(fields) < 10 or not physical_device.fullmatch(fields[2]):
             continue
         try:
-            read_sectors += int(fields[5])
-            write_sectors += int(fields[9])
+            device_read_sectors = int(fields[5])
+            device_write_sectors = int(fields[9])
         except ValueError:
             continue
-        devices.append(fields[2])
-    if not devices:
+        read_sectors += device_read_sectors
+        write_sectors += device_write_sectors
+        disks.append(
+            {
+                "name": fields[2],
+                "read_bytes": device_read_sectors * 512,
+                "write_bytes": device_write_sectors * 512,
+            }
+        )
+    if not disks:
         return {"available": False, "reason": "no supported physical disks found"}
+    disks.sort(key=lambda disk: disk["name"])
     return {
         "available": True,
         "read_bytes": read_sectors * 512,
         "write_bytes": write_sectors * 512,
         "source": "host",
-        "devices": ", ".join(devices),
+        "devices": ", ".join(disk["name"] for disk in disks),
+        "disks": disks,
     }
 
 
@@ -305,7 +482,13 @@ def get_docker() -> dict[str, Any]:
 def get_metrics() -> dict[str, Any]:
     settings = load_settings()
     enabled = settings["metrics"]
-    metrics: dict[str, Any] = {"timestamp": int(time.time() * 1000), "hostname": get_host_name(), "uptime_seconds": round(time.time() - psutil.boot_time()), "enabled": enabled}
+    metrics: dict[str, Any] = {
+        "timestamp": int(time.time() * 1000),
+        "hostname": get_host_name(),
+        "uptime_seconds": get_uptime_seconds(),
+        "version": APP_VERSION,
+        "enabled": enabled,
+    }
     # Each branch gates its collection to make a disabled metric genuinely free.
     if enabled["cpu"]:
         metrics["cpu"] = get_cpu()
@@ -328,7 +511,7 @@ app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": APP_VERSION}
 
 
 @app.get("/api/settings")
