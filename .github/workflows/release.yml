@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: Semantic version increment
+        required: true
+        type: choice
+        default: PATCH
+        options:
+          - PATCH
+          - MINOR
+          - MAJOR
+      release_as:
+        description: One-time explicit version such as 1.0.0 (overrides increment)
+        required: false
+        type: string
+
+concurrency:
+  group: dashboard-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  attestations: write
+  id-token: write
+
+env:
+  IMAGE: ghcr.io/singhangadin/dgx-spark-dashboard
+
+jobs:
+  release:
+    name: Version, publish, and release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate and prepare release
+        id: prepare
+        env:
+          VERSION_TYPE: ${{ inputs.version_type }}
+          RELEASE_AS: ${{ inputs.release_as }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "Run releases from the main branch, not $GITHUB_REF_NAME." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main develop --tags
+          git checkout -B main origin/main
+
+          if [[ -z "$RELEASE_AS" ]]; then
+            echo "Promoting develop into main for release."
+            git merge --no-ff origin/develop -m "Merge develop into main for release"
+          else
+            echo "Explicit bootstrap release; tagging current main without promotion."
+          fi
+
+          NEW_VERSION=$(python3 scripts/release/bump.py)
+          TAG="v${NEW_VERSION}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists." >&2
+            exit 1
+          fi
+
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          python3 scripts/release/changelog.py "$PREVIOUS_TAG" HEAD > release-notes.md
+          cat release-notes.md
+
+          if ! git diff --quiet -- VERSION; then
+            git add VERSION
+            git commit -m "chore(release): ${TAG}"
+          fi
+          git tag -a "$TAG" -F release-notes.md
+
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release source
+        run: |
+          python3 -m py_compile backend/app/main.py scripts/release/bump.py scripts/release/changelog.py
+          node --check frontend/app.js
+          sh -n install.sh
+          docker compose config >/dev/null
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config >/dev/null
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish DGX Spark image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          push: true
+          build-args: APP_VERSION=${{ steps.prepare.outputs.version }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.prepare.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.title=DGX Spark Dashboard
+            org.opencontainers.image.description=Lightweight host monitoring for NVIDIA DGX Spark
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.prepare.outputs.commit }}
+            org.opencontainers.image.version=${{ steps.prepare.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Package clone-free deployment bundle
+        env:
+          VERSION: ${{ steps.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/deploy
+          cp install.sh docker-compose.yml docker-compose.gpu.yml docker-compose.cdi.yml .env.example dist/deploy/
+          printf '%s\n' "$VERSION" > dist/deploy/VERSION
+          touch dist/deploy/.dgx-dashboard-release
+          tar -czf dist/dgx-spark-dashboard-deploy.tar.gz -C dist/deploy .
+          cd dist
+          sha256sum dgx-spark-dashboard-deploy.tar.gz > dgx-spark-dashboard-deploy.tar.gz.sha256
+
+      - name: Push release commit and tag
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: git push origin main "$TAG"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --verify-tag \
+            --title "Release $TAG" \
+            --notes-file release-notes.md \
+            dist/dgx-spark-dashboard-deploy.tar.gz \
+            dist/dgx-spark-dashboard-deploy.tar.gz.sha256
+
+      - name: Sync release back into develop
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch origin main develop --tags
+          git checkout -B develop origin/develop
+          git merge --no-ff origin/main -m "chore: sync main into develop after ${TAG}"
+          git push origin develop

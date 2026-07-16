@@ -1,12 +1,11 @@
 services:
   dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: dgx-spark-dashboard:local
+    image: "${DASHBOARD_IMAGE:-ghcr.io/singhangadin/dgx-spark-dashboard}:${DASHBOARD_VERSION:-latest}"
     restart: unless-stopped
-    ports:
-      - "${DASHBOARD_PORT:-8787}:8787"
+    # Host networking is required for genuine host-interface counters. The
+    # process still runs unprivileged with every Linux capability dropped.
+    network_mode: host
+    command: ["uvicorn", "app.main:app", "--host", "${DASHBOARD_BIND_ADDRESS:-127.0.0.1}", "--port", "${DASHBOARD_PORT:-8787}", "--no-access-log"]
     environment:
       DASHBOARD_SETTINGS_PATH: /app/data/settings.json
       NVIDIA_VISIBLE_DEVICES: all
@@ -18,7 +17,12 @@ services:
       - ./data:/app/data
       # Keep the displayed identity accurate without exposing the host root.
       - /etc/hostname:/host-hostname:ro
-      # Read host uplink counters without sharing the host network namespace.
+      # Explicit host CPU, memory, load, and uptime counters.
+      - /proc/stat:/host-proc-stat:ro
+      - /proc/cpuinfo:/host-proc-cpuinfo:ro
+      - /proc/meminfo:/host-meminfo:ro
+      - /proc/loadavg:/host-loadavg:ro
+      # Read host uplink counters from the shared host network namespace.
       - /proc/net/dev:/host-network-dev:ro
       - /proc/net/route:/host-network-route:ro
       # Aggregate physical-disk I/O counters, not filesystem capacity data.
@@ -33,8 +37,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # With host networking uvicorn binds to DASHBOARD_BIND_ADDRESS only, so the
+    # in-container check must target that same address rather than loopback.
+    # (If you set 0.0.0.0, change this back to 127.0.0.1.)
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://${DASHBOARD_BIND_ADDRESS:-127.0.0.1}:${DASHBOARD_PORT:-8787}/api/health')"]
       interval: 30s
       timeout: 3s
       retries: 3
