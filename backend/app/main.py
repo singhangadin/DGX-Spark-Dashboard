@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -446,32 +447,54 @@ def get_gpu() -> dict[str, Any]:
     return {"available": bool(gpus), "gpus": gpus}
 
 
+def _container_stats(container: Any) -> dict[str, Any]:
+    """Sample one running container's live CPU/memory usage.
+
+    A single `stats(stream=False)` read takes ~1-2s because the daemon samples the
+    container, so callers run these concurrently — collecting them serially makes
+    the whole /api/metrics response grow with the number of running containers.
+    """
+    try:
+        stats = container.stats(stream=False)
+    except (DockerException, RequestException):
+        return {"stats_available": False}
+    cpu = stats.get("cpu_stats", {})
+    previous = stats.get("precpu_stats", {})
+    cpu_delta = cpu.get("cpu_usage", {}).get("total_usage", 0) - previous.get("cpu_usage", {}).get("total_usage", 0)
+    system_delta = cpu.get("system_cpu_usage", 0) - previous.get("system_cpu_usage", 0)
+    online_cpus = cpu.get("online_cpus") or len(cpu.get("cpu_usage", {}).get("percpu_usage", [])) or 1
+    memory = stats.get("memory_stats", {})
+    return {
+        "cpu_percent": round((cpu_delta / system_delta * online_cpus * 100) if system_delta else 0, 1),
+        "memory_used": memory.get("usage", 0),
+        "memory_limit": memory.get("limit", 0),
+    }
+
+
 def get_docker() -> dict[str, Any]:
     client: DockerClient | None = None
     try:
-        client = DockerClient(base_url="unix:///var/run/docker.sock", timeout=2)
+        client = DockerClient(base_url="unix:///var/run/docker.sock", timeout=5)
         containers = client.containers.list(all=True)
-        result = []
+        items: list[dict[str, Any]] = []
+        running: list[tuple[dict[str, Any], Any]] = []
         for container in containers:
             info = container.attrs
             state_info = info.get("State", "unknown")
             state = state_info.get("Status", "unknown") if isinstance(state_info, dict) else state_info
             image = info.get("Config", {}).get("Image") or info.get("Image", "untagged")
             item: dict[str, Any] = {"name": container.name, "image": image, "state": state}
+            items.append(item)
             if state == "running":
-                try:
-                    stats = container.stats(stream=False)
-                    cpu = stats.get("cpu_stats", {})
-                    previous = stats.get("precpu_stats", {})
-                    cpu_delta = cpu.get("cpu_usage", {}).get("total_usage", 0) - previous.get("cpu_usage", {}).get("total_usage", 0)
-                    system_delta = cpu.get("system_cpu_usage", 0) - previous.get("system_cpu_usage", 0)
-                    online_cpus = cpu.get("online_cpus") or len(cpu.get("cpu_usage", {}).get("percpu_usage", [])) or 1
-                    memory = stats.get("memory_stats", {})
-                    item.update({"cpu_percent": round((cpu_delta / system_delta * online_cpus * 100) if system_delta else 0, 1), "memory_used": memory.get("usage", 0), "memory_limit": memory.get("limit", 0)})
-                except (DockerException, RequestException):
-                    item["stats_available"] = False
-            result.append(item)
-        return {"available": True, "containers": result}
+                running.append((item, container))
+        # Sample all running containers concurrently so the request stays fast
+        # regardless of how many containers are running.
+        if running:
+            with ThreadPoolExecutor(max_workers=min(8, len(running))) as executor:
+                samples = executor.map(_container_stats, (container for _, container in running))
+                for (item, _), sample in zip(running, samples):
+                    item.update(sample)
+        return {"available": True, "containers": items}
     except (DockerException, RequestException) as error:
         return {"available": False, "reason": str(error)}
     finally:
