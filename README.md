@@ -128,9 +128,9 @@ with all six categories enabled:
 | Measurement | Value |
 | --- | --- |
 | Container image | ~190 MB |
-| Memory (RSS) | ~42 MiB (~0.03% of 128 GB) |
-| CPU, one dashboard open at 2 s refresh | ~1–4% of a single core |
-| CPU, no dashboard open | ~0 — nothing runs between requests |
+| Memory (RSS) | ~41 MiB idle, ~44 MiB serving (~0.03% of 128 GB) |
+| CPU, no dashboard open | ~0.2% of one core — just the 30 s healthcheck |
+| CPU, one dashboard open at 2 s refresh | ~1% of one core (brief spikes while sampling Docker/GPU) |
 | `/api/metrics`, all categories | ~1.1 s |
 | `/api/metrics`, Docker category disabled | ~50 ms |
 
