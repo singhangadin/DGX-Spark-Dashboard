@@ -119,6 +119,26 @@ When multiple host network interfaces or physical disks are present, use the arr
 controls on their summary cards—or swipe on a touch screen—to move between
 sources. The default-route interface is identified in the network carousel.
 
+## Resource usage
+
+The dashboard is demand-driven: it runs no background collector and reads metrics
+only when a browser requests them. Measured on a DGX Spark (GB10, 20-core Arm)
+with all six categories enabled:
+
+| Measurement | Value |
+| --- | --- |
+| Container image | ~190 MB |
+| Memory (RSS) | ~42 MiB (~0.03% of 128 GB) |
+| CPU, one dashboard open at 2 s refresh | ~1–4% of a single core |
+| CPU, no dashboard open | ~0 — nothing runs between requests |
+| `/api/metrics`, all categories | ~1.1 s |
+| `/api/metrics`, Docker category disabled | ~50 ms |
+
+Docker container statistics dominate the request time because Docker's stats API
+samples each running container; every other category is a fast read of host
+kernel files. Turning off categories you do not need in **Settings** removes
+their cost entirely.
+
 ## Dashboard settings
 
 Open **Settings** in the header to choose:
@@ -245,3 +265,10 @@ anonymous one-command installation.
 ## License
 
 Copyright 2026 Angad Singh. Licensed under the [Apache License 2.0](LICENSE).
+
+## Support
+
+If DGX Spark Dashboard is useful to you, consider supporting its continued
+development — it's genuinely appreciated. ☕
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://www.buymeacoffee.com/singhangad.in)
