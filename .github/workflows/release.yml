@@ -21,11 +21,8 @@ concurrency:
   group: dashboard-release
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  packages: write
-  attestations: write
-  id-token: write
+# Least privilege by default; the release job grants only what it needs.
+permissions: {}
 
 env:
   IMAGE: ghcr.io/singhangadin/dgx-spark-dashboard
@@ -33,14 +30,25 @@ env:
 jobs:
   release:
     name: Version, publish, and release
+    # Never run in a fork: the registry, release identity, and push targets are
+    # owner-specific, and forks must not consume this workflow.
+    if: github.repository == 'singhangadin/DGX-Spark-Dashboard'
     runs-on: ubuntu-latest
+    # A hung emulated build must not run unbounded.
+    timeout-minutes: 30
+    permissions:
+      contents: write # Push the release branch and tag.
+      pull-requests: write # main/develop are updated only via merged PRs.
+      packages: write # Publish the image to GHCR.
+      attestations: write # Build provenance attestations.
+      id-token: write # OIDC for provenance signing.
     steps:
       - name: Check out full history
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Validate and prepare release
+      - name: Prepare release branch
         id: prepare
         env:
           VERSION_TYPE: ${{ inputs.version_type }}
@@ -55,18 +63,21 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main develop --tags
-          git checkout -B main origin/main
 
+          # main and develop are never pushed to directly; the release is staged
+          # on its own branch and merged into main (and back into develop) via
+          # pull requests. A normal release promotes develop; an explicit
+          # release_as stages from main as-is.
           if [[ -z "$RELEASE_AS" ]]; then
-            echo "Promoting develop into main for release."
-            git merge --no-ff origin/develop -m "Merge develop into main for release"
+            git checkout -B release-staging origin/develop
           else
-            echo "Explicit bootstrap release; tagging current main without promotion."
+            git checkout -B release-staging origin/main
           fi
 
           NEW_VERSION=$(python3 scripts/release/bump.py)
           TAG="v${NEW_VERSION}"
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null \
+             || git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
             echo "Tag ${TAG} already exists." >&2
             exit 1
           fi
@@ -75,14 +86,16 @@ jobs:
           python3 scripts/release/changelog.py "$PREVIOUS_TAG" HEAD > release-notes.md
           cat release-notes.md
 
-          if ! git diff --quiet -- VERSION; then
-            git add VERSION
-            git commit -m "chore(release): ${TAG}"
-          fi
-          git tag -a "$TAG" -F release-notes.md
+          git add VERSION
+          git commit -m "chore(release): ${TAG}"
+
+          RELEASE_BRANCH="release/${TAG}"
+          git branch -m "$RELEASE_BRANCH"
+          git push -f origin "$RELEASE_BRANCH"
 
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Validate release source
@@ -141,10 +154,25 @@ jobs:
           cd dist
           sha256sum dgx-spark-dashboard-deploy.tar.gz > dgx-spark-dashboard-deploy.tar.gz.sha256
 
-      - name: Push release commit and tag
+      - name: Promote release into main via pull request
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.prepare.outputs.tag }}
-        run: git push origin main "$TAG"
+          RELEASE_BRANCH: ${{ steps.prepare.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+          gh pr create --base main --head "$RELEASE_BRANCH" \
+            --title "Release ${TAG}" \
+            --body "Automated release ${TAG}. Merges the staged release into main."
+          # Mergeability is computed asynchronously; retry briefly.
+          for _ in $(seq 1 10); do
+            if gh pr merge "$RELEASE_BRANCH" --merge; then break; fi
+            sleep 6
+          done
+          git fetch origin main --tags
+          # Tag the merged commit on main and push the tag (tag creation is allowed).
+          git tag -a "$TAG" origin/main -F release-notes.md
+          git push origin "$TAG"
 
       - name: Publish GitHub Release
         env:
@@ -158,12 +186,20 @@ jobs:
             dist/dgx-spark-dashboard-deploy.tar.gz \
             dist/dgx-spark-dashboard-deploy.tar.gz.sha256
 
-      - name: Sync release back into develop
+      - name: Sync release into develop via pull request
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.prepare.outputs.tag }}
+          RELEASE_BRANCH: ${{ steps.prepare.outputs.release_branch }}
         run: |
           set -euo pipefail
-          git fetch origin main develop --tags
-          git checkout -B develop origin/develop
-          git merge --no-ff origin/main -m "chore: sync main into develop after ${TAG}"
-          git push origin develop
+          if ! gh pr create --base develop --head "$RELEASE_BRANCH" \
+            --title "chore: sync ${TAG} into develop" \
+            --body "Brings the release commit for ${TAG} back into develop."; then
+            echo "No sync PR needed; develop already contains ${TAG}."
+            exit 0
+          fi
+          for _ in $(seq 1 10); do
+            if gh pr merge "$RELEASE_BRANCH" --merge --delete-branch; then break; fi
+            sleep 6
+          done
