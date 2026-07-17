@@ -44,7 +44,7 @@ docs/ARCHITECTURE.md       Metric sources, performance and security decisions
 - Python: standard library first; use explicit response models/typed shapes where practical.
 - Frontend: vanilla HTML/CSS/JS. Avoid a framework and any CDN dependencies.
 - Keep `/api/metrics` backward compatible. Additive fields are safe; rename/remove only with a migration note in the README.
-- Use `nvidia-smi` only when GPU metrics are enabled. Its failure must degrade to `available: false`, never fail the whole request.
+- Query the GPU via NVML (`nvidia-ml-py`) only when GPU metrics are enabled. Any NVML failure (including a missing driver or `NOT_SUPPORTED` fields) must degrade to `available: false` or a `None` field, never fail the whole request.
 - Container statistics are expensive because Docker returns cumulative counters. Query them only when the `docker` category is enabled.
 
 ## Validation

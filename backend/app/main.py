@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+import pynvml
 from docker import DockerClient
 from docker.errors import DockerException
 from fastapi import FastAPI, HTTPException
@@ -424,27 +423,50 @@ def get_cpu_temperature(readings: list[dict[str, Any]]) -> dict[str, Any] | None
 
 
 def get_gpu() -> dict[str, Any]:
-    if not shutil.which("nvidia-smi"):
-        return {"available": False, "reason": "nvidia-smi is unavailable in this container"}
-    query = "index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw,power.limit"
+    # NVML is the library nvidia-smi itself wraps, so this reads the same driver
+    # counters without forking a process or parsing CSV on every poll.
     try:
-        output = subprocess.run(
-            ["nvidia-smi", f"--query-gpu={query}", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=2, check=True,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return {"available": False, "reason": "unable to query NVIDIA GPU"}
-    gpus = []
-    for line in output.splitlines():
-        row = [item.strip() for item in line.split(",")]
-        if len(row) != 9:
-            continue
-        def numeric(value: str) -> float | None:
-            if "n/a" in value.lower() or "not supported" in value.lower():
+        pynvml.nvmlInit()
+    except pynvml.NVMLError:
+        return {"available": False, "reason": "NVML (NVIDIA driver) is unavailable in this container"}
+    try:
+        def read(func: Any, *args: Any) -> Any:
+            # Many fields are hardware-dependent. On the GB10's unified memory,
+            # GPU memory info and the power limit report NOT_SUPPORTED, matching
+            # the dashes nvidia-smi prints; treat any NVML error as "field absent".
+            try:
+                return func(*args)
+            except pynvml.NVMLError:
                 return None
-            return float(re.sub(r"[^0-9.]", "", value) or 0)
-        gpus.append({"index": int(row[0]), "name": row[1], "utilization": numeric(row[2]), "memory_utilization": numeric(row[3]), "memory_used_mib": numeric(row[4]), "memory_total_mib": numeric(row[5]), "temperature_c": numeric(row[6]), "power_w": numeric(row[7]), "power_limit_w": numeric(row[8])})
-    return {"available": bool(gpus), "gpus": gpus}
+
+        gpus = []
+        for index in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            name = read(pynvml.nvmlDeviceGetName, handle)
+            if isinstance(name, bytes):
+                name = name.decode()
+            util = read(pynvml.nvmlDeviceGetUtilizationRates, handle)
+            memory = read(pynvml.nvmlDeviceGetMemoryInfo, handle)
+            temperature = read(pynvml.nvmlDeviceGetTemperature, handle, pynvml.NVML_TEMPERATURE_GPU)
+            power = read(pynvml.nvmlDeviceGetPowerUsage, handle)
+            power_limit = read(pynvml.nvmlDeviceGetPowerManagementLimit, handle)
+            gpus.append({
+                "index": index,
+                "name": name,
+                "utilization": float(util.gpu) if util else None,
+                "memory_utilization": float(util.memory) if util else None,
+                "memory_used_mib": round(memory.used / 1048576, 1) if memory else None,
+                "memory_total_mib": round(memory.total / 1048576, 1) if memory else None,
+                "temperature_c": float(temperature) if temperature is not None else None,
+                "power_w": round(power / 1000, 2) if power is not None else None,
+                "power_limit_w": round(power_limit / 1000, 2) if power_limit is not None else None,
+            })
+        return {"available": bool(gpus), "gpus": gpus}
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except pynvml.NVMLError:
+            pass
 
 
 def _container_stats(container: Any) -> dict[str, Any]:
