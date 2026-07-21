@@ -122,7 +122,7 @@ The dashboard will then be available at `http://localhost:8788`.
 | 🐳 Docker | Containers, state, image, CPU, and memory use | Settings → Docker containers |
 
 Disabled categories are not collected. For example, disabling NVIDIA GPU skips
-the `nvidia-smi` call and disabling Docker skips all Docker socket calls.
+the NVML (NVIDIA driver) query and disabling Docker skips all Docker socket calls.
 When multiple host network interfaces or physical disks are present, use the arrow
 controls on their summary cards—or swipe on a touch screen—to move between
 sources. The default-route interface is identified in the network carousel.
@@ -208,7 +208,7 @@ Toolkit environment. If the GPU panel says telemetry is unavailable:
 3. Run `./install.sh` again so it can select NVIDIA runtime or CDI support.
 
 Some driver fields are hardware-dependent. A dash beside **LIMIT** means
-`nvidia-smi` did not expose a live configurable GPU power-limit value. It does
+the driver did not expose a live configurable GPU power-limit value. It does
 not mean that power monitoring has failed; **POWER** can still report current
 draw. The DGX Spark's published GB10 TDP is a hardware specification, not
 necessarily a live driver power-limit reading.
