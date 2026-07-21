@@ -136,23 +136,31 @@ with all six categories enabled:
 | Measurement | Value |
 | --- | --- |
 | 📦 Container image | ~190 MB |
-| 🧵 Memory (RSS) | ~41 MiB idle, ~44 MiB serving (~0.03% of 128 GB) |
-| 💤 CPU, no dashboard open | ~0.2% of one core — just the 30 s healthcheck |
-| 🔥 CPU, one dashboard open at 2 s refresh | ~1% of one core (brief spikes while sampling Docker/GPU) |
-| ⏱️ `/api/metrics`, all categories | ~1.1 s |
-| ⚡ `/api/metrics`, Docker category disabled | ~50 ms |
+| 🧵 Memory (RSS) | ~57 MiB, idle or serving (~0.045% of 128 GB) |
+| 💤 CPU, no dashboard open | ~0.1% of one core — just the 30 s healthcheck |
+| 🔥 CPU, one dashboard open at 2 s refresh | ~0.9% of one core |
+| ⏱️ `/api/metrics`, all categories | ~2.0 s |
+| ⚡ `/api/metrics`, Docker category disabled | ~12 ms |
+| 🎮 GPU collection alone (NVML) | ~1.3 ms per poll |
 
 > 🪶 **For comparison:** NVIDIA's standard GPU observability stack (DCGM Exporter +
 > Prometheus + Grafana) runs **3 always-on containers** using **~600 MiB RAM** and
 > **~2.5 GB** of images, scraping continuously whether or not anyone is watching —
-> roughly **14× the memory** and **13× the disk** of this dashboard. That stack does
+> roughly **10× the memory** and **13× the disk** of this dashboard. That stack does
 > more (history, alerting, the full DCGM field set); this one is a live-only glance
 > at a single DGX Spark.
 
-Docker container statistics dominate the request time because Docker's stats API
-samples each running container; every other category is a fast read of host
-kernel files. Turning off categories you do not need in **Settings** removes
-their cost entirely.
+Docker container statistics dominate the request time: Docker's stats API samples
+each container over a fixed interval, which sets a floor of about two seconds no
+matter how many containers are running. Every other category is a fast read of
+host kernel files, so turning off categories you do not need in **Settings**
+removes their cost entirely — with Docker off, a full poll takes ~12 ms.
+
+GPU telemetry is read through NVML (the library `nvidia-smi` itself wraps) over a
+cached session, so a poll costs about 1.3 ms and forks no process. The resident
+NVIDIA driver library is why the memory figure sits near 57 MiB rather than the
+~44 MiB of releases before 1.0.1; it is a fixed, one-time cost that does not grow
+with uptime or poll count.
 
 ## ⚙️ Dashboard settings
 

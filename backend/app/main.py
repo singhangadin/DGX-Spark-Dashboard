@@ -422,12 +422,43 @@ def get_cpu_temperature(readings: list[dict[str, Any]]) -> dict[str, Any] | None
     return None
 
 
+_NVML_LOCK = threading.Lock()
+_nvml_ready = False
+
+
+def _ensure_nvml() -> bool:
+    """Initialise NVML once and keep the session for the process lifetime.
+
+    An nvmlInit/nvmlShutdown cycle costs ~9 ms, which dwarfs the ~1.4 ms the
+    queries themselves take, so tearing the session down every poll was most of
+    the cost. Keeping it open does not cost extra memory: the driver library's
+    pages stay resident after the first load either way.
+    """
+    global _nvml_ready
+    if _nvml_ready:
+        return True
+    with _NVML_LOCK:
+        if _nvml_ready:  # another thread initialised while we waited
+            return True
+        try:
+            pynvml.nvmlInit()
+        except pynvml.NVMLError:
+            return False
+        _nvml_ready = True
+        return True
+
+
+def _reset_nvml() -> None:
+    """Drop the cached session so the next poll re-initialises it."""
+    global _nvml_ready
+    with _NVML_LOCK:
+        _nvml_ready = False
+
+
 def get_gpu() -> dict[str, Any]:
     # NVML is the library nvidia-smi itself wraps, so this reads the same driver
     # counters without forking a process or parsing CSV on every poll.
-    try:
-        pynvml.nvmlInit()
-    except pynvml.NVMLError:
+    if not _ensure_nvml():
         return {"available": False, "reason": "NVML (NVIDIA driver) is unavailable in this container"}
     try:
         def read(func: Any, *args: Any) -> Any:
@@ -462,11 +493,12 @@ def get_gpu() -> dict[str, Any]:
                 "power_limit_w": round(power_limit / 1000, 2) if power_limit is not None else None,
             })
         return {"available": bool(gpus), "gpus": gpus}
-    finally:
-        try:
-            pynvml.nvmlShutdown()
-        except pynvml.NVMLError:
-            pass
+    except pynvml.NVMLError:
+        # Device enumeration failed, so the cached session is stale (a driver
+        # reload, for example). Drop it and report unavailable for this poll;
+        # the next one re-initialises. Per-field errors are handled in read().
+        _reset_nvml()
+        return {"available": False, "reason": "unable to query NVIDIA GPU"}
 
 
 def _container_stats(container: Any) -> dict[str, Any]:
