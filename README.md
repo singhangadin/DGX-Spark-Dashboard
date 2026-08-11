@@ -23,7 +23,7 @@ kernel files; their API payloads identify the source explicitly.
 
 - 🧠 **CPU** — utilization, core/thread count, frequency, and exposed CPU/SoC temperature
 - 🎮 **NVIDIA GPU** — utilization, temperature, power draw, VRAM where the driver exposes it, and a GPU workload view
-- 💾 **Memory & I/O** — RAM and swap usage, per-interface host-network rates, and per-disk read/write throughput
+- 💾 **Memory & I/O** — RAM and swap usage, per-interface host-network rates, free disk space, and per-disk read/write throughput
 - 🐳 **Docker** — container name, image, status, CPU, and memory usage
 - 🌗 **Themes** — light, dark, and system appearance modes
 - 📈 **Views** — switchable chart and text modes for the summary cards and GPU details
@@ -118,7 +118,7 @@ The dashboard will then be available at `http://localhost:8788`.
 | 🎮 NVIDIA GPU | Utilization, temperature, power draw, memory where available | Settings → NVIDIA GPU |
 | 💾 Memory | RAM and swap use | Settings → RAM & swap |
 | 🌐 Network | Host traffic and current receive/send rate for each useful interface | Settings → Host network totals |
-| 📀 Disk I/O | Read/write throughput for every physical disk | Settings → Host disk I/O |
+| 📀 Disk | Free space on the filesystem holding the installation, plus read/write throughput for every physical disk | Settings → Host disk I/O |
 | 🐳 Docker | Containers, state, image, CPU, and memory use | Settings → Docker containers |
 
 Disabled categories are not collected. For example, disabling NVIDIA GPU skips

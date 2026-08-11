@@ -58,6 +58,19 @@ const prettyBytes = (value = 0) => {
   }
   return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 };
+// Free space is a headline number, so it is formatted as tightly as the value
+// allows: at most two decimals, trailing zeros trimmed. 4 GiB, 4.1 GiB,
+// 2.15 TiB. Units stay binary to match every other card in the dashboard.
+const compactBytes = (value = 0) => {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index++;
+  }
+  // Number() drops the trailing zeros toFixed() pads on, so 4.00 renders as 4.
+  return `${index === 0 ? Math.round(value) : Number(value.toFixed(2))} ${units[index]}`;
+};
 const sourceDetail = (source, detail) =>
   `<span class="source-detail-name">${escapeHTML(source)}</span><span class="source-detail-rates">${detail}</span>`;
 const uptimeDetail = (seconds) => {
@@ -302,7 +315,8 @@ function renderSummary(data) {
     if (!data.disk.available) {
       cards.push(card("DISK I/O", "—", data.disk.reason, "neutral"));
     } else {
-      const disks = data.disk.disks?.length
+      const capacity = data.disk.capacity,
+        disks = data.disk.disks?.length
           ? data.disk.disks
           : [
               {
@@ -342,9 +356,18 @@ function renderSummary(data) {
             combinedRate,
             data.timestamp,
           );
+          // Free space is the number worth glancing at: it is actionable and
+          // running out of it is a real failure mode, where a read+write sum is
+          // neither rate and is already broken out on the line below. Capacity
+          // is filesystem-wide rather than per-device, so the tooltip names the
+          // filesystem; the throughput sum stays the headline only when the
+          // capacity read is unavailable.
+          const capacityDetail = capacity
+            ? `${compactBytes(capacity.free_bytes)} free of ${compactBytes(capacity.total_bytes)} on ${capacity.path}`
+            : "capacity unavailable";
           return {
             name: disk.name,
-            value: totalRate,
+            value: capacity ? compactBytes(capacity.free_bytes) : totalRate,
             sub: sourceDetail(disk.name, detail),
             chart: showCharts
               ? sparkline(
@@ -354,14 +377,16 @@ function renderSummary(data) {
                   "bytes",
                 )
               : "",
-            title: `Host disk ${disk.name} · read total ${prettyBytes(disk.read_bytes)} · written total ${prettyBytes(disk.write_bytes)}`,
+            title: `Host disk ${disk.name} · ${capacityDetail} · read total ${prettyBytes(disk.read_bytes)} · written total ${prettyBytes(disk.write_bytes)}`,
           };
         });
       previousDisk = nextDisk;
       cards.push(
         sourceCarouselCard(
           "disk",
-          "DISK I/O",
+          // The headline is capacity now, so "DISK I/O" would misname it; the
+          // I/O rates and sparkline still live in the card body.
+          "DISK",
           slides,
           "disk-card",
         ),

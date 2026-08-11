@@ -8,7 +8,8 @@ The dashboard has one container, one process, and no background collector. The b
 | --- | --- | --- |
 | CPU, RAM, uptime | Read-only host `/proc/stat`, `/proc/cpuinfo`, `/proc/meminfo`, and `/proc/loadavg` binds | The API returns `source: host`; it labels a container fallback only if a required host file is unavailable |
 | Host network | Host network namespace plus read-only `/proc/net/dev` and `/proc/net/route` binds | Returns useful host interfaces, including physical, wireless and VPN interfaces, while omitting loopback and container-internal noise; marks the default uplink |
-| Host disk I/O | Read-only host `/proc/diskstats` bind | Returns counters for every supported physical disk plus legacy aggregate totals; no capacity or filesystem scan |
+| Host disk I/O | Read-only host `/proc/diskstats` bind | Returns counters for every supported physical disk plus legacy aggregate totals; no filesystem scan |
+| Host disk capacity | `statvfs` on the existing `data` bind mount | Capacity is a filesystem property that `/proc/diskstats` does not carry. `data` is already bound from the host, so this measures the host filesystem holding the installation without any additional host access. Free space excludes root-reserved blocks. `DASHBOARD_DISK_CAPACITY_PATH` overrides the measured path; a failed read degrades to `capacity: null` rather than failing disk collection |
 | GPUs | NVML (`libnvidia-ml`) via `nvidia-ml-py` | Runs only when GPU is enabled; reads the same driver counters `nvidia-smi` exposes, without a subprocess or CSV parsing |
 | Docker containers | Docker Engine Unix socket | Read-only application behavior; per-container stats are collected only if enabled |
 
