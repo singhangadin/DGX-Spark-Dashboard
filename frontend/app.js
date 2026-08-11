@@ -111,13 +111,20 @@ const sparkline = (values, tone, label, format) => {
       : [{ value: 0, timestamp: Date.now() }],
     points = observed.map((sample) => sample.value),
     chartPoints = points.length > 1 ? points : [points[0], points[0]],
-    minimum = Math.min(...chartPoints),
-    range = Math.max(Math.max(...chartPoints) - minimum, 1);
+    // Percentages are drawn against a fixed 0-100 axis so a line's height means
+    // the same thing on every card and in every window: a GPU pinned at 96%
+    // sits near the top instead of collapsing onto the baseline once the series
+    // goes flat. Byte rates have no natural ceiling, so they stay auto-scaled.
+    // Both anchor at 0, which also stops idle jitter from being stretched into
+    // a full-height spike.
+    ceiling = format === "percent" ? 100 : Math.max(...chartPoints, 1);
   const line = chartPoints
-    .map(
-      (value, index) =>
-        `${((index / (chartPoints.length - 1)) * 100).toFixed(1)},${(27 - ((value - minimum) / range) * 22).toFixed(1)}`,
-    )
+    .map((value, index) => {
+      const x = (index / (chartPoints.length - 1)) * 100,
+        // Clamp so a driver reporting over 100% cannot draw outside the viewBox.
+        y = 27 - Math.min(Math.max(value / ceiling, 0), 1) * 22;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
     .join(" ");
   return `<div class="summary-chart-wrap" tabindex="0" role="img" aria-label="${escapeHTML(label)} chart" data-values="${observed.map((sample) => Number(sample.value).toFixed(3)).join(",")}" data-times="${observed.map((sample) => Number(sample.timestamp)).join(",")}" data-label="${escapeHTML(label)}" data-format="${format}"><svg class="summary-chart" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true" style="color:${toneColor(tone)}"><polyline points="0,31 ${line} 100,31" fill="currentColor" opacity=".12"/><polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="chart-tooltip" role="status"></span></div>`;
 };
