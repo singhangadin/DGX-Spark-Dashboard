@@ -35,6 +35,11 @@ HOST_LOADAVG_PATH = Path(os.getenv("DASHBOARD_HOST_LOADAVG_PATH", "/host-loadavg
 HOST_NETWORK_DEV_PATH = Path(os.getenv("DASHBOARD_HOST_NETWORK_DEV_PATH", "/host-network-dev"))
 HOST_NETWORK_ROUTE_PATH = Path(os.getenv("DASHBOARD_HOST_NETWORK_ROUTE_PATH", "/host-network-route"))
 HOST_DISKSTATS_PATH = Path(os.getenv("DASHBOARD_HOST_DISKSTATS_PATH", "/host-diskstats"))
+# Capacity is a filesystem property, so it cannot come from the diskstats bind.
+# `data` is already a host bind mount, which makes it a window onto the host
+# filesystem the installation lives on — no additional host access required.
+# Override only to measure a filesystem other than the one holding the install.
+DISK_CAPACITY_PATH = Path(os.getenv("DASHBOARD_DISK_CAPACITY_PATH", "/app/data"))
 SETTINGS_LOCK = threading.Lock()
 CPU_SAMPLE_LOCK = threading.Lock()
 PREVIOUS_HOST_CPU_SAMPLE: tuple[int, int] | None = None
@@ -356,6 +361,35 @@ def get_network() -> dict[str, Any]:
     }
 
 
+def get_disk_capacity() -> dict[str, Any] | None:
+    """Report host filesystem capacity for the volume holding the installation.
+
+    Returns None when the path cannot be stat'ed, so a capacity failure degrades
+    to a card without a capacity figure rather than failing disk collection.
+    """
+    try:
+        stats = os.statvfs(DISK_CAPACITY_PATH)
+    except OSError:
+        return None
+    block = stats.f_frsize or stats.f_bsize
+    total = stats.f_blocks * block
+    if total <= 0:
+        return None
+    # f_bavail excludes root-reserved blocks, so it is what an ordinary process
+    # can actually write — the honest "free" figure. Used is derived from
+    # f_bfree instead, so reserved blocks count as used and the parts still sum
+    # to the total.
+    free = stats.f_bavail * block
+    used = total - stats.f_bfree * block
+    return {
+        "path": str(DISK_CAPACITY_PATH),
+        "total_bytes": total,
+        "free_bytes": free,
+        "used_bytes": used,
+        "percent": round(used / total * 100, 1),
+    }
+
+
 def get_disk_io() -> dict[str, Any]:
     """Read per-device and aggregate physical-disk counters from host diskstats."""
     try:
@@ -394,6 +428,7 @@ def get_disk_io() -> dict[str, Any]:
         "source": "host",
         "devices": ", ".join(disk["name"] for disk in disks),
         "disks": disks,
+        "capacity": get_disk_capacity(),
     }
 
 
